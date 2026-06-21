@@ -1,6 +1,6 @@
-# app/services/relevance_service.py
-
 import os
+import json
+
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -11,7 +11,10 @@ client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY")
 )
 
-def select_best_news(brand_profile, news_articles):
+def select_best_news(
+    brand_profile,
+    news_articles
+):
 
     prompt = f"""
 Brand Profile:
@@ -21,9 +24,12 @@ News Articles:
 {news_articles}
 
 Task:
+
 Choose the SINGLE most relevant news article.
 
-Return JSON:
+Return ONLY valid JSON.
+
+Format:
 
 {{
     "selected_title":"",
@@ -33,6 +39,7 @@ Return JSON:
 }}
 
 Possible angles:
+
 - informative
 - inspirational
 - humorous
@@ -50,4 +57,18 @@ Possible angles:
         ]
     )
 
-    return response.choices[0].message.content
+    result = response.choices[0].message.content
+
+    result = result.replace(
+        "```json",
+        ""
+    )
+
+    result = result.replace(
+        "```",
+        ""
+    )
+
+    result = result.strip()
+
+    return json.loads(result)

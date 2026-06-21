@@ -1,4 +1,5 @@
 import os
+import json
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -10,7 +11,6 @@ client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY")
 )
 
-
 def generate_content(
     brand_profile,
     news_match
@@ -21,11 +21,9 @@ Brand Profile:
 
 {brand_profile}
 
-
 Selected News:
 
 {news_match}
-
 
 Generate:
 
@@ -41,17 +39,40 @@ Requirements:
 - Be relevant to the audience
 - Keep Twitter under 280 characters
 
-Return JSON only.
+Return ONLY valid JSON.
+
+Format:
+
+{{
+    "instagram_caption":"",
+    "linkedin_post":"",
+    "tweet_x":""
+}}
 """
 
     response = client.chat.completions.create(
         model="openai/gpt-oss-20b:free",
         messages=[
             {
-                "role": "user",
-                "content": prompt
+                "role":"user",
+                "content":prompt
             }
         ]
     )
 
-    return response.choices[0].message.content
+    result = response.choices[0].message.content
+
+    result = result.replace(
+        "```json",
+        ""
+    )
+
+    result = result.replace(
+        "```",
+        ""
+    )
+
+    result = result.strip()
+
+    return json.loads(result)
+
