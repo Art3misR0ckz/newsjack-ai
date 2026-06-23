@@ -15,6 +15,8 @@ from typing import Any, Dict, Mapping, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from app.config import settings
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,9 @@ def score_brand_relevance(brand_profile: Mapping[str, Any], opportunity: Mapping
 
     topic = _extract_topic(opportunity)
 
+    if not OPENROUTER_API_KEY or not settings.enable_llm_relevance:
+        return _result_with_topic(topic, _heuristic_scores(brand_profile, opportunity))
+
     try:
         response_text = _call_openrouter(brand_profile, opportunity)
         parsed = _parse_llm_response(response_text)
@@ -71,7 +76,7 @@ def score_brand_relevance(brand_profile: Mapping[str, Any], opportunity: Mapping
         return normalized
     except Exception:
         logger.exception("Brand relevance scoring failed for topic '%s'", topic)
-        return _result_with_topic(topic, FALLBACK_RESULT)
+        return _result_with_topic(topic, _heuristic_scores(brand_profile, opportunity))
 
 
 def _call_openrouter(brand_profile: Mapping[str, Any], opportunity: Mapping[str, Any]) -> str:
@@ -220,6 +225,10 @@ def _heuristic_scores(brand_profile: Mapping[str, Any], opportunity: Mapping[str
         "relevance_score": max(0, min(100, relevance)),
         "audience_overlap": max(0, min(100, audience_overlap)),
         "newsjack_potential": max(0, min(100, newsjack_potential)),
+        "reason": (
+            "Deterministic fallback based on overlap between the brand, audience, "
+            "industry, goals, and the current trend."
+        ),
         "recommended_angle": angle,
     }
 

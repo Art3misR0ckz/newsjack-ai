@@ -1,133 +1,129 @@
-from services.brand_audit_service import scrape_brand_website
-from services.brand_profile_service import generate_brand_profile
-from services.news_service import fetch_news
-from services.mindshare_service import score_articles
-from services.relevance_service import select_best_news
-from services.content_generation_service import generate_content
+"""FastAPI application for NEWSJACK AI."""
 
+from __future__ import annotations
 
-# =====================================
-# STAGE 1 - BRAND AUDIT
-# =====================================
+from typing import Any
 
-data = scrape_brand_website(
-    "https://www.thewholetruthfoods.com"
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from app.config import settings
+from app.logging_config import configure_logging
+from app.models import BrandProfile
+from app.services.analytics_service import build_analytics
+from app.services.brand_profile_service import (
+    create_brand_profile,
+    delete_brand_profile,
+    list_brand_profiles,
+    load_brand_profile,
+    update_brand_profile,
+)
+from app.services.competitor_monitor_service import monitor_competitors
+from app.services.pipeline_service import add_campaign_assets, discover_and_rank
+from app.services.trend_discovery_service import discover_trends
+
+configure_logging()
+
+app = FastAPI(
+    title=settings.app_name,
+    description="Discover trends. Find opportunities. Generate campaigns.",
+    version="1.0.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-print("\n" + "=" * 60)
-print("BRAND AUDIT")
-print("=" * 60)
 
-print(data)
-
-
-# =====================================
-# STAGE 2 - BRAND PROFILE
-# =====================================
-
-profile = generate_brand_profile(
-    data
-)
-
-print("\n" + "=" * 60)
-print("BRAND PROFILE")
-print("=" * 60)
-
-print(profile)
+class OpportunityRequest(BaseModel):
+    brand_profile: BrandProfile
+    limit: int = 8
+    generate_assets: bool = False
 
 
-# =====================================
-# STAGE 3 - NEWS FETCHING
-# =====================================
+class CampaignRequest(BaseModel):
+    brand_profile: BrandProfile
+    opportunity: dict[str, Any]
 
-articles = fetch_news(
-    profile["keywords"]
-)
 
-print("\n" + "=" * 60)
-print("NEWS ARTICLES")
-print("=" * 60)
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"name": settings.app_name, "status": "ready", "docs": "/docs"}
 
-for article in articles:
 
-    print("\n" + "-" * 50)
+@app.get("/health")
+def health() -> dict[str, Any]:
+    return {
+        "status": "healthy",
+        "providers": {
+            "openrouter": bool(settings.openrouter_api_key),
+            "serpapi": bool(settings.serpapi_key),
+            "newsapi": bool(settings.newsapi_key),
+        },
+    }
 
-    print(
-        article["title"]
+
+@app.get("/api/trends")
+def trends(limit: int = Query(default=10, ge=1, le=50)) -> list[dict[str, Any]]:
+    return discover_trends(limit)
+
+
+@app.get("/api/brands")
+def brands() -> list[dict[str, Any]]:
+    return [item.model_dump(mode="json") for item in list_brand_profiles()]
+
+
+@app.post("/api/brands", status_code=201)
+def create_brand(profile: BrandProfile) -> dict[str, Any]:
+    return create_brand_profile(profile.model_dump()).model_dump(mode="json")
+
+
+@app.get("/api/brands/{profile_id}")
+def get_brand(profile_id: str) -> dict[str, Any]:
+    try:
+        return load_brand_profile(profile_id).model_dump(mode="json")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/brands/{profile_id}")
+def update_brand(profile_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return update_brand_profile(profile_id, payload).model_dump(mode="json")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/brands/{profile_id}")
+def delete_brand(profile_id: str) -> dict[str, bool]:
+    if not delete_brand_profile(profile_id):
+        raise HTTPException(status_code=404, detail="Brand profile not found")
+    return {"deleted": True}
+
+
+@app.post("/api/opportunities")
+def opportunities(request: OpportunityRequest) -> list[dict[str, Any]]:
+    return discover_and_rank(
+        request.brand_profile.model_dump(),
+        limit=request.limit,
+        generate_assets=request.generate_assets,
     )
 
-    print(
-        article["description"]
-    )
+
+@app.post("/api/campaigns/generate")
+def campaign(request: CampaignRequest) -> dict[str, Any]:
+    return add_campaign_assets(request.brand_profile.model_dump(), request.opportunity)
 
 
-# =====================================
-# STAGE 4 - MINDSHARE
-# =====================================
-
-articles = score_articles(
-    articles
-)
-
-print("\n" + "=" * 60)
-print("MINDSHARE SCORES")
-print("=" * 60)
-
-for article in articles:
-
-    print("\n")
-    print(
-        "Keyword:",
-        article["trend_keyword"]
-    )
-
-    print(
-        "Score:",
-        article["mindshare_score"]
-    )
-
-    print(
-        "Trend:",
-        article["trend"]
-    )
-
-print(
-    article["title"]
-)
+@app.post("/api/analytics")
+def analytics(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+    return build_analytics(opportunities)
 
 
-# Only keep top 2
-
-top_articles = articles[:2]
-
-
-# =====================================
-# STAGE 5 - RELEVANCE MATCHING
-# =====================================
-
-result = select_best_news(
-    profile,
-    top_articles
-)
-
-print("\n" + "=" * 60)
-print("BEST NEWS MATCH")
-print("=" * 60)
-
-print(result)
-
-
-# =====================================
-# STAGE 6 - CONTENT GENERATION
-# =====================================
-
-content = generate_content(
-    profile,
-    result
-)
-
-print("\n" + "=" * 60)
-print("GENERATED CONTENT")
-print("=" * 60)
-
-print(content)
+@app.post("/api/competitors")
+def competitors(payload: dict[str, list[str]]) -> list[dict[str, Any]]:
+    return monitor_competitors(payload.get("competitors", []))

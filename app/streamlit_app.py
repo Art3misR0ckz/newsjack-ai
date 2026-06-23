@@ -1,440 +1,295 @@
+"""Investor-demo quality Streamlit dashboard for NEWSJACK AI."""
+
+from __future__ import annotations
+
+from html import escape
+
+import pandas as pd
+import plotly.express as px
 import streamlit as st
-import sys
-import os
-import json
-import re
 
-sys.path.append(
-    os.path.abspath(
-        os.path.dirname(__file__)
-    )
+from app.logging_config import configure_logging
+from app.services.analytics_service import build_analytics
+from app.services.brand_profile_service import list_brand_profiles, save_brand_profile
+from app.services.competitor_monitor_service import monitor_competitors
+from app.services.pipeline_service import add_campaign_assets, discover_and_rank
+
+configure_logging()
+
+st.set_page_config(page_title="NEWSJACK AI", page_icon="⚡", layout="wide")
+
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1400px;}
+      [data-testid="stMetric"] {background: rgba(120,120,120,.08); border: 1px solid rgba(130,130,130,.18);
+        padding: 16px; border-radius: 16px;}
+      .nj-card {padding: 18px; border: 1px solid rgba(130,130,130,.22); border-radius: 18px;
+        background: linear-gradient(145deg, rgba(110,86,207,.10), rgba(0,180,180,.04)); margin-bottom: 12px;}
+      .nj-kicker {letter-spacing: .12em; text-transform: uppercase; color: #8c83ff; font-size: .78rem; font-weight: 700;}
+      .nj-score {font-size: 2rem; font-weight: 800; color: #7f75ff;}
+      .stButton > button {border-radius: 12px; font-weight: 650;}
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-from services.brand_audit_service import scrape_brand_website
-from services.brand_profile_service import generate_brand_profile
-from services.news_service import fetch_news
-from services.mindshare_service import score_articles
-from services.relevance_service import select_best_news
-from services.content_generation_service import generate_content
+DEFAULT_BRAND = {
+    "brand_name": "ProteinX",
+    "industry": "Fitness & Nutrition",
+    "target_audience": "Gym enthusiasts and health-conscious young professionals",
+    "tone": "Motivational, credible, energetic",
+    "goals": "Increase awareness and build category authority",
+    "keywords": ["fitness", "protein", "recovery", "workout", "nutrition"],
+    "competitors": ["MuscleBlaze", "Optimum Nutrition", "MyProtein"],
+    "products": ["Protein Powder", "Pre Workout"],
+    "brand_summary": "A performance nutrition brand helping active people train and recover better.",
+}
+
+if "brand" not in st.session_state:
+    saved = list_brand_profiles()
+    st.session_state.brand = saved[0].model_dump(mode="json") if saved else DEFAULT_BRAND.copy()
+if "opportunities" not in st.session_state:
+    st.session_state.opportunities = []
+if "selected_topic" not in st.session_state:
+    st.session_state.selected_topic = None
 
 
-# =====================================================
-# CONFIG
-# =====================================================
+def headline(title: str, subtitle: str) -> None:
+    st.markdown('<div class="nj-kicker">Mindshare Intelligence Engine</div>', unsafe_allow_html=True)
+    st.title(title)
+    st.caption(subtitle)
 
-st.set_page_config(
-    page_title="NewsJack AI",
-    page_icon="📰",
-    layout="wide"
-)
 
-st.title("📰 NewsJack AI")
-st.caption("Mindshare-Driven Newsjacking Engine")
-
-st.divider()
-
-brand_url = st.text_input(
-    "Enter Brand Website URL",
-    placeholder="https://www.thewholetruthfoods.com"
-)
-
-# =====================================================
-# PIPELINE
-# =====================================================
-
-if st.button("Analyze Brand"):
-
-    if not brand_url:
-        st.error("Please enter a valid URL.")
-        st.stop()
-
-    try:
-
-        with st.spinner("Running NewsJack Pipeline..."):
-
-            # =================================
-            # STAGE 1
-            # =================================
-
-            audit_data = scrape_brand_website(
-                brand_url
-            )
-
-            if not audit_data:
-                st.error(
-                    "Could not scrape website."
-                )
-                st.stop()
-
-            # =================================
-            # STAGE 2
-            # =================================
-
-            profile = generate_brand_profile(
-                audit_data
-            )
-
-            if isinstance(profile, str):
-
-                try:
-                    profile = re.sub(
-                        r"```json|```",
-                        "",
-                        profile
-                    ).strip()
-
-                    profile = json.loads(
-                        profile
-                    )
-
-                except Exception:
-                    st.error(
-                        "Brand profile JSON parsing failed."
-                    )
-                    st.write(profile)
-                    st.stop()
-
-            # =================================
-            # STAGE 3
-            # =================================
-
-            articles = fetch_news(
-                profile.get(
-                    "keywords",
-                    []
-                )
-            )
-
-            if not articles:
-                st.error(
-                    "No news articles found."
-                )
-                st.stop()
-
-            # =================================
-            # STAGE 4
-            # =================================
-
-            articles = score_articles(
-                articles
-            )
-
-            top_articles = articles[:2]
-
-            # =================================
-            # STAGE 5
-            # =================================
-
-            result = select_best_news(
-                profile,
-                top_articles
-            )
-
-            if isinstance(result, str):
-
-                try:
-                    result = re.sub(
-                        r"```json|```",
-                        "",
-                        result
-                    ).strip()
-
-                    result = json.loads(
-                        result
-                    )
-
-                except Exception:
-                    st.error(
-                        "Opportunity JSON parsing failed."
-                    )
-                    st.write(result)
-                    st.stop()
-
-            # =================================
-            # STAGE 6
-            # =================================
-
-            content = generate_content(
-                profile,
-                result
-            )
-
-            if isinstance(content, str):
-
-                try:
-                    content = re.sub(
-                        r"```json|```",
-                        "",
-                        content
-                    ).strip()
-
-                    content = json.loads(
-                        content
-                    )
-
-                except Exception:
-                    st.error(
-                        "Content JSON parsing failed."
-                    )
-                    st.write(content)
-                    st.stop()
-
-    except Exception as e:
-
-        st.error(
-            f"Pipeline Error: {e}"
+def run_discovery(generate_assets: bool = False) -> None:
+    with st.spinner("Scanning live signals and ranking brand opportunities…"):
+        st.session_state.opportunities = discover_and_rank(
+            st.session_state.brand, limit=6, generate_assets=generate_assets
         )
+    if st.session_state.opportunities:
+        st.session_state.selected_topic = st.session_state.opportunities[0]["topic"]
+    st.toast("Opportunity scan complete", icon="⚡")
 
-        st.stop()
 
-    # =====================================================
-    # OUTPUT
-    # =====================================================
+def selected_opportunity() -> dict | None:
+    for item in st.session_state.opportunities:
+        if item["topic"] == st.session_state.selected_topic:
+            return item
+    return st.session_state.opportunities[0] if st.session_state.opportunities else None
 
-    st.success(
-        "Analysis Complete"
+
+def score_color(score: int) -> str:
+    return "🟢" if score >= 75 else "🟡" if score >= 55 else "🔵"
+
+
+with st.sidebar:
+    st.markdown("## ⚡ NEWSJACK AI")
+    st.caption("Discover trends. Find opportunities. Generate campaigns.")
+    page = st.radio(
+        "Workspace",
+        ["Overview", "Opportunity Explorer", "Campaign Studio", "Brand Profile", "Competitor Monitor", "Analytics"],
+        label_visibility="collapsed",
     )
-
     st.divider()
+    st.caption("Active brand")
+    st.write(f"**{st.session_state.brand['brand_name']}**")
+    st.caption(st.session_state.brand.get("industry", ""))
+    if st.button("Run intelligence scan", type="primary", use_container_width=True):
+        run_discovery()
 
-    # =====================================================
-    # BRAND PROFILE
-    # =====================================================
 
-    st.header(
-        "🏢 Brand Profile"
-    )
+if page == "Overview":
+    headline("Your next campaign is already in the news.", "See the strongest moments for your brand before attention moves on.")
+    if not st.session_state.opportunities:
+        st.info("Run an intelligence scan to load live opportunities. Provider-free fallback data keeps the demo fully usable.")
+        if st.button("Discover opportunities", type="primary"):
+            run_discovery()
+            st.rerun()
+    items = st.session_state.opportunities
+    if items:
+        analytics = build_analytics(items)
+        cols = st.columns(4)
+        cols[0].metric("Opportunities", len(items))
+        cols[1].metric("Average score", analytics["average_score"])
+        cols[2].metric("High priority", sum(item["final_score"] >= 75 for item in items))
+        cols[3].metric("News sources", sum(item["source_diversity"] for item in items))
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.write(
-            "**Brand Name**"
-        )
-
-        st.write(
-            profile.get(
-                "brand_name",
-                "N/A"
-            )
-        )
-
-        st.write(
-            "**Category**"
-        )
-
-        st.write(
-            profile.get(
-                "category",
-                "N/A"
-            )
-        )
-
-        st.write(
-            "**Tone**"
-        )
-
-        st.write(
-            profile.get(
-                "tone",
-                "N/A"
-            )
-        )
-
-    with col2:
-
-        st.write(
-            "**Target Audience**"
-        )
-
-        st.write(
-            profile.get(
-                "target_audience",
-                []
-            )
-        )
-
-        st.write(
-            "**Keywords**"
-        )
-
-        st.write(
-            profile.get(
-                "keywords",
-                []
-            )
-        )
-
-    st.write(
-        "**Brand Summary**"
-    )
-
-    st.info(
-        profile.get(
-            "brand_summary",
-            ""
-        )
-    )
-
-    st.divider()
-
-    # =====================================================
-    # NEWS ARTICLES
-    # =====================================================
-
-    st.header(
-        "📰 News Articles"
-    )
-
-    for article in articles:
-
-        with st.expander(
-            article.get(
-                "title",
-                "Untitled"
-            )
-        ):
-
-            st.write(
-                article.get(
-                    "description",
-                    ""
+        left, right = st.columns([1.7, 1])
+        with left:
+            st.subheader("Top opportunities")
+            for item in items[:5]:
+                safe_category = escape(str(item["category"]))
+                safe_source = escape(str(item["source"]))
+                safe_topic = escape(str(item["topic"]))
+                safe_summary = escape(str(item["summary"] or item["reason"]))
+                st.markdown(
+                    f"""<div class="nj-card"><div class="nj-kicker">{safe_category} · {safe_source}</div>
+                    <h3>{score_color(item['final_score'])} {safe_topic}</h3>
+                    <p>{safe_summary}</p>
+                    <span class="nj-score">{item['final_score']}</span> / 100</div>""",
+                    unsafe_allow_html=True,
                 )
-            )
+        with right:
+            frame = pd.DataFrame(analytics["top_categories"])
+            if not frame.empty:
+                st.plotly_chart(
+                    px.pie(frame, names="category", values="count", hole=.58, title="Trending categories"),
+                    use_container_width=True,
+                )
 
-            st.write(
-                f"Mindshare Score: {article.get('mindshare_score',0)}"
-            )
-
-            st.write(
-                f"Trend: {article.get('trend','unknown')}"
-            )
-
-    st.divider()
-
-    # =====================================================
-    # BEST OPPORTUNITY
-    # =====================================================
-
-    st.header(
-        "🎯 Selected Opportunity"
-    )
-
-    st.success(
-        result.get(
-            "selected_title",
-            ""
-        )
-    )
-
-    st.metric(
-        "Relevance Score",
-        result.get(
-            "relevance_score",
-            0
-        )
-    )
-
-    st.write(
-        "**Recommended Angle**"
-    )
-
-    st.write(
-        result.get(
-            "angle",
-            ""
-        )
-    )
-
-    st.write(
-        "**Reason**"
-    )
-
-    st.info(
-        result.get(
-            "reason",
-            ""
-        )
-    )
-
-    st.divider()
-
-    # =====================================================
-    # GENERATED CONTENT
-    # =====================================================
-
-    st.header(
-        "✨ Generated Content"
-    )
-
-    tab1, tab2, tab3 = st.tabs(
-        [
-            "Instagram",
-            "LinkedIn",
-            "Twitter/X"
+elif page == "Opportunity Explorer":
+    headline("Opportunity Explorer", "Search, filter, and inspect the evidence behind every score.")
+    items = st.session_state.opportunities
+    if not items:
+        st.warning("Run an intelligence scan from the sidebar first.")
+    else:
+        query = st.text_input("Search opportunities", placeholder="AI, sports, sustainability…")
+        categories = sorted({item["category"] for item in items})
+        selected_categories = st.multiselect("Categories", categories, default=categories)
+        minimum = st.slider("Minimum score", 0, 100, 40)
+        filtered = [
+            item for item in items
+            if query.lower() in item["topic"].lower()
+            and item["category"] in selected_categories
+            and item["final_score"] >= minimum
         ]
-    )
+        for item in filtered:
+            with st.expander(f"{score_color(item['final_score'])} {item['topic']} — {item['final_score']}/100"):
+                a, b, c, d = st.columns(4)
+                a.metric("Trend strength", item["trend_strength"])
+                b.metric("Brand relevance", item["brand_relevance"])
+                c.metric("Audience overlap", item["audience_overlap"])
+                d.metric("Newsjack potential", item["newsjack_potential"])
+                st.write(item["reason"])
+                st.progress(item["final_score"] / 100)
+                articles = item.get("articles", [])
+                if articles:
+                    st.markdown("#### Supporting news")
+                    for article in articles[:5]:
+                        label = f"{article['headline']} · {article['source']}"
+                        if article.get("url"):
+                            st.markdown(f"- [{label}]({article['url']})")
+                        else:
+                            st.markdown(f"- {label}")
+                if st.button("Open in Campaign Studio", key=f"studio-{item['topic']}"):
+                    st.session_state.selected_topic = item["topic"]
+                    st.toast("Opportunity selected. Open Campaign Studio from the sidebar.")
 
-    with tab1:
+elif page == "Campaign Studio":
+    headline("Campaign Studio", "Turn a strong signal into a channel-ready campaign.")
+    items = st.session_state.opportunities
+    if not items:
+        st.warning("Run an intelligence scan before generating a campaign.")
+    else:
+        topics = [item["topic"] for item in items]
+        current = st.session_state.selected_topic if st.session_state.selected_topic in topics else topics[0]
+        st.session_state.selected_topic = st.selectbox("Opportunity", topics, index=topics.index(current))
+        item = selected_opportunity()
+        if item:
+            top = st.columns([3, 1])
+            top[0].subheader(item["topic"])
+            top[0].write(item["reason"])
+            top[1].metric("Opportunity score", item["final_score"])
+            if st.button("Generate / regenerate campaign", type="primary"):
+                with st.spinner("Building the campaign and channel copy…"):
+                    generated = add_campaign_assets(st.session_state.brand, item)
+                    for index, candidate in enumerate(st.session_state.opportunities):
+                        if candidate["topic"] == generated["topic"]:
+                            st.session_state.opportunities[index] = generated
+                    item = generated
+            if item.get("campaign"):
+                campaign = item["campaign"]
+                st.success(campaign["campaign_angle"])
+                c1, c2 = st.columns(2)
+                c1.write("**Why it matters**")
+                c1.write(campaign["why_it_matters"])
+                c2.write("**Recommended channels**")
+                c2.write(" · ".join(campaign["recommended_channels"]))
+                content = item.get("content", {})
+                tabs = st.tabs(["LinkedIn", "X / Twitter", "Instagram", "Hook & CTA"])
+                tabs[0].text_area("LinkedIn post", content.get("linkedin_post", ""), height=240)
+                tabs[1].text_area("X post", content.get("twitter_post", ""), height=180)
+                tabs[2].text_area("Instagram caption", content.get("instagram_caption", ""), height=240)
+                with tabs[3]:
+                    st.text_area("Marketing hook", content.get("marketing_hook", ""))
+                    st.text_area("CTA", content.get("cta", ""))
+                    st.write(" ".join(content.get("hashtags", [])))
+            else:
+                st.info("Generate the campaign to create angles, channel recommendations, and social copy.")
 
-        st.text_area(
-            "Instagram Caption",
-            value=content.get(
-                "instagram_caption",
-                ""
-            ),
-            height=250
+elif page == "Brand Profile":
+    headline("Brand Profile", "Teach the engine what your brand stands for and who it needs to reach.")
+    brand = st.session_state.brand
+    with st.form("brand-profile"):
+        c1, c2 = st.columns(2)
+        name = c1.text_input("Brand name", brand.get("brand_name", ""))
+        industry = c2.text_input("Industry", brand.get("industry", ""))
+        audience = st.text_area("Target audience", brand.get("target_audience", ""))
+        tone = c1.text_input("Tone", brand.get("tone", ""))
+        goals = c2.text_input("Goals", brand.get("goals", ""))
+        keywords = st.text_input("Keywords (comma separated)", ", ".join(brand.get("keywords", [])))
+        products = st.text_input("Products (comma separated)", ", ".join(brand.get("products", [])))
+        competitors = st.text_input("Competitors (comma separated)", ", ".join(brand.get("competitors", [])))
+        summary = st.text_area("Brand summary", brand.get("brand_summary", ""))
+        submitted = st.form_submit_button("Save brand profile", type="primary")
+    if submitted:
+        saved = save_brand_profile(
+            {
+                **brand,
+                "brand_name": name,
+                "industry": industry,
+                "target_audience": audience,
+                "tone": tone,
+                "goals": goals,
+                "keywords": keywords,
+                "products": products,
+                "competitors": competitors,
+                "brand_summary": summary,
+            }
         )
+        st.session_state.brand = saved.model_dump(mode="json")
+        st.success("Brand profile saved.")
 
-    with tab2:
+elif page == "Competitor Monitor":
+    headline("Competitor Monitor", "Track announcements and earned-media signals around your competitive set.")
+    competitors = st.session_state.brand.get("competitors", [])
+    edited = st.text_input("Competitors", ", ".join(competitors))
+    if st.button("Refresh competitor intelligence", type="primary"):
+        with st.spinner("Checking recent coverage…"):
+            st.session_state.competitor_mentions = monitor_competitors(
+                [item.strip() for item in edited.split(",") if item.strip()]
+            )
+    mentions = st.session_state.get("competitor_mentions", [])
+    if not mentions:
+        st.info("No mentions loaded yet. NewsAPI credentials enable live monitoring.")
+    for mention in mentions:
+        with st.expander(f"{mention['competitor']} · {mention['headline']}"):
+            st.write(mention.get("description", ""))
+            st.caption(f"{mention.get('source', 'Unknown')} · {mention.get('date', '')}")
+            if mention.get("url"):
+                st.link_button("Read source", mention["url"])
 
-        st.text_area(
-            "LinkedIn Post",
-            value=content.get(
-                "linkedin_post",
-                ""
-            ),
-            height=250
+elif page == "Analytics":
+    headline("Analytics", "Understand where opportunity is clustering and how strongly it fits your brand.")
+    items = st.session_state.opportunities
+    if not items:
+        st.warning("Run an intelligence scan to populate analytics.")
+    else:
+        analytics = build_analytics(items)
+        a, b = st.columns(2)
+        score_df = pd.DataFrame(analytics["score_breakdown"])
+        category_df = pd.DataFrame(analytics["top_categories"])
+        a.plotly_chart(
+            px.bar(score_df, x="topic", y=["final_score", "brand_relevance", "newsjack_potential"],
+                   barmode="group", title="Opportunity score composition"),
+            use_container_width=True,
         )
-
-    with tab3:
-
-        st.text_area(
-            "Tweet / X Post",
-            value=content.get(
-                "tweet_x",
-                ""
-            ),
-            height=250
+        b.plotly_chart(
+            px.bar(category_df, x="category", y="count", color="category", title="Category volume"),
+            use_container_width=True,
         )
-
-    st.divider()
-
-    # =====================================================
-    # MINDSHARE RANKING
-    # =====================================================
-
-    st.header(
-        "📊 Mindshare Ranking"
-    )
-
-    for idx, article in enumerate(
-        articles,
-        start=1
-    ):
-
-        st.write(
-            f"{idx}. {article.get('title','')}"
+        distribution = pd.DataFrame(analytics["opportunity_distribution"])
+        st.plotly_chart(
+            px.area(distribution, x="band", y="count", markers=True, title="Score distribution"),
+            use_container_width=True,
         )
-
-        st.write(
-            f"Score: {article.get('mindshare_score',0)}"
-        )
-
-        st.write(
-            f"Trend: {article.get('trend','unknown')}"
-        )
-
-        st.write("---")
-

@@ -10,6 +10,7 @@ import logging
 import os
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
@@ -217,10 +218,12 @@ def get_trend_news() -> List[Dict[str, Any]]:
 
 
 def _fetch_articles_for_topic(topic: str) -> List[Dict[str, Any]]:
-    articles: List[Dict[str, Any]] = []
-    articles.extend(_fetch_serpapi_google_news(topic))
-    articles.extend(_fetch_serpapi_trends_news(topic))
-    articles.extend(_fetch_newsapi_articles(topic))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        batches = executor.map(
+            lambda fetcher: fetcher(topic),
+            (_fetch_serpapi_google_news, _fetch_newsapi_articles),
+        )
+        articles = [article for batch in batches for article in batch]
 
     logger.info("Fetched %s raw articles for topic '%s'", len(articles), topic)
     return articles
@@ -236,14 +239,14 @@ def _fetch_serpapi_google_news(topic: str) -> List[Dict[str, Any]]:
                 "engine": "google_news",
                 "q": topic,
                 "hl": "en",
-                "gl": SERPAPI_GEO,
+                "gl": SERPAPI_GEO.lower(),
                 "api_key": SERPAPI_KEY,
             }
         )
         results = search.get_dict()
         return [_normalize_serpapi_article(article) for article in results.get("news_results", [])]
     except Exception:
-        logger.exception("SerpAPI Google News fetch failed for topic '%s'", topic)
+        logger.warning("SerpAPI Google News fetch failed for topic '%s'", topic)
         return []
 
 
@@ -281,7 +284,7 @@ def _fetch_serpapi_trends_news(topic: str) -> List[Dict[str, Any]]:
         news_results = news_search.get_dict()
         return [_normalize_serpapi_article(article) for article in news_results.get("news_results", [])]
     except Exception:
-        logger.exception("SerpAPI Trends News fetch failed for topic '%s'", topic)
+        logger.warning("SerpAPI Trends News fetch failed for topic '%s'", topic)
         return []
 
 
@@ -305,7 +308,7 @@ def _fetch_newsapi_articles(topic: str) -> List[Dict[str, Any]]:
         payload = response.json()
         return [_normalize_newsapi_article(article) for article in payload.get("articles", [])]
     except Exception:
-        logger.exception("NewsAPI fallback failed for topic '%s'", topic)
+        logger.warning("NewsAPI fallback failed for topic '%s'", topic)
         return []
 
 
@@ -343,7 +346,8 @@ def _clean_and_score_articles(topic: str, raw_articles: Sequence[Dict[str, Any]]
             continue
 
         url = _normalize_url(raw_article.get("url", ""))
-        if not url or url in seen_urls:
+        url_key = url.casefold()
+        if not url or url_key in seen_urls:
             continue
 
         title_key = _normalize_title_key(title)
@@ -363,7 +367,7 @@ def _clean_and_score_articles(topic: str, raw_articles: Sequence[Dict[str, Any]]
 
         importance_score = calculate_importance_score(topic, raw_article, relevance_score)
 
-        seen_urls.add(url)
+        seen_urls.add(url_key)
         seen_titles.add(title_key)
 
         scored_articles.append(
@@ -429,7 +433,7 @@ def calculate_importance_score(topic: str, article: Dict[str, Any], relevance_sc
 
 
 def _source_quality_score(source: str) -> int:
-    normalized = _normalize_text(source)
+    normalized = _normalize_text(source).lower()
     if not normalized:
         return 25
 
@@ -531,7 +535,7 @@ def calculate_newsjack_score(topic: str, articles: Sequence[Dict[str, Any]]) -> 
 
 
 def infer_category(topic: str) -> str:
-    normalized = _normalize_text(topic)
+    normalized = _normalize_text(topic).lower()
     if not normalized:
         return "general"
 
@@ -582,7 +586,7 @@ def _trend_popularity_score(topic: str) -> int:
             popularity = min(100, max(20, increase_percentage + min(60, search_volume // 1000)))
             break
     except Exception:
-        logger.exception("Failed to calculate popularity score for '%s'", topic)
+        logger.warning("Failed to calculate popularity score for '%s'", topic)
 
     return popularity
 
@@ -616,13 +620,13 @@ def _fetch_live_trends() -> List[Dict[str, Any]]:
 
         return trends
     except Exception:
-        logger.exception("Failed to fetch live trends")
+        logger.warning("Failed to fetch live trends")
         return []
 
 
 def _topics_match(left: str, right: str) -> bool:
-    left_normalized = _normalize_text(left)
-    right_normalized = _normalize_text(right)
+    left_normalized = _normalize_text(left).lower()
+    right_normalized = _normalize_text(right).lower()
     if not left_normalized or not right_normalized:
         return False
     if left_normalized == right_normalized:
@@ -669,7 +673,7 @@ def _normalize_text(value: Any) -> str:
 
 
 def _normalize_url(value: Any) -> str:
-    url = _normalize_text(value).lower()
+    url = _normalize_text(value)
     return url.rstrip("/")
 
 

@@ -1,0 +1,1 @@
+"""NEWSJACK AI application package."""
