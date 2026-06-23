@@ -1,0 +1,17 @@
+[
+    {
+        "topic": "International Yoga Day",
+        "category": "health",
+        "source": "event"
+    },
+    {
+        "topic": "World Environment Day",
+        "category": "sustainability",
+        "source": "event"
+    },
+    {
+        "topic": "Independence Day India",
+        "category": "national",
+        "source": "event"
+    }
+]

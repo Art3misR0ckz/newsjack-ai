@@ -1,0 +1,17 @@
+[
+    {
+        "topic": "FIFA Club World Cup",
+        "category": "sports",
+        "source": "sports"
+    },
+    {
+        "topic": "Wimbledon",
+        "category": "sports",
+        "source": "sports"
+    },
+    {
+        "topic": "ICC Cricket Events",
+        "category": "sports",
+        "source": "sports"
+    }
+]

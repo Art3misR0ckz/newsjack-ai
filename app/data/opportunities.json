@@ -1,0 +1,34 @@
+[
+    {
+        "topic": "International Yoga Day",
+        "type": "health"
+    },
+    {
+        "topic": "Monsoon Season",
+        "type": "seasonal"
+    },
+    {
+        "topic": "FIFA Club World Cup",
+        "type": "sports"
+    },
+    {
+        "topic": "World Environment Day",
+        "type": "sustainability"
+    },
+    {
+        "topic": "Apple WWDC",
+        "type": "technology"
+    },
+    {
+        "topic": "AI Product Launches",
+        "type": "technology"
+    },
+    {
+        "topic": "Back To School Season",
+        "type": "seasonal"
+    },
+    {
+        "topic": "Independence Day India",
+        "type": "national"
+    }
+]
