@@ -30,6 +30,20 @@ def generate_content(
             f"Trending now: {topic} ✨\n\n{campaign_angle}.\n\n"
             "We’re turning the conversation into something useful for our community."
         ),
+        "blog_outline": (
+            f"1. What happened around {topic}\n"
+            f"2. Why it matters for {brand_profile.get('target_audience', 'the audience')}\n"
+            f"3. {brand}'s practical point of view\n"
+            "4. Three actions readers can take this week\n"
+            "5. Soft CTA into the brand offer"
+        ),
+        "ad_copy": f"Headline: Turn {topic} into momentum.\nBody: {brand} helps you act on what matters now.",
+        "email_campaign": (
+            f"Subject: What {topic} means right now\n\n"
+            f"Hi {{first_name}},\n\n{topic} is shaping the conversation. "
+            f"Here is {brand}'s practical take: {campaign_angle}.\n\nCTA: {fallback_cta()}"
+        ),
+        "landing_page_headline": f"What {topic} means for {brand_profile.get('industry', 'your market')} — and what to do next",
         "marketing_hook": f"What {topic} means for people who care about {brand_profile.get('industry', 'this space')}.",
         "cta": "Join the conversation and share your perspective.",
         "hashtags": hashtags,
@@ -40,7 +54,8 @@ def generate_content(
             "Return strict JSON only. Keep twitter_post under 280 characters."
         ),
         user_prompt=(
-            "Return keys linkedin_post, twitter_post, instagram_caption, marketing_hook, cta, hashtags.\n"
+            "Return keys linkedin_post, twitter_post, instagram_caption, blog_outline, ad_copy, "
+            "email_campaign, landing_page_headline, marketing_hook, cta, hashtags.\n"
             f"Brand: {json.dumps(dict(brand_profile), default=str)}\n"
             f"Opportunity: {json.dumps(dict(news_match), default=str)}\n"
             f"Campaign: {json.dumps(dict(campaign or {}), default=str)}"
@@ -54,6 +69,10 @@ def generate_content(
     pack = ContentPack.model_validate(merged).model_dump(mode="json")
     pack["tweet_x"] = pack["twitter_post"]
     return pack
+
+
+def fallback_cta() -> str:
+    return "Explore the full recommendation"
 
 
 def _hashtags(topic: str, brand_profile: Mapping[str, Any]) -> list[str]:

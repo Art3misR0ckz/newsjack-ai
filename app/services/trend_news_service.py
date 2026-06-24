@@ -14,12 +14,16 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import requests
 from dateutil import parser as date_parser
 from dotenv import load_dotenv
 from serpapi import GoogleSearch
+
+from app.config import settings
+from app.services.cache_service import cached_call
+from app.services.query_generation_service import generate_brand_queries
 
 load_dotenv()
 
@@ -27,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+GNEWS_API_KEY = os.getenv("GNEWS_API_KEY")
 SERPAPI_GEO = os.getenv("SERPAPI_GEO", "IN")
 NEWSAPI_LANGUAGE = os.getenv("NEWSAPI_LANGUAGE", "en")
 MAX_ARTICLE_AGE_DAYS = int(os.getenv("TREND_NEWS_MAX_AGE_DAYS", "7"))
@@ -182,6 +187,25 @@ def get_news_for_trend(topic: str) -> Dict[str, Any]:
         return _empty_result(topic)
 
 
+def get_brand_news_pool(brand_profile: Mapping[str, Any], limit_per_query: int = 8) -> List[Dict[str, Any]]:
+    """Build a brand-relevant raw news pool from GNews first, then existing fallbacks."""
+
+    queries = generate_brand_queries(brand_profile)
+    if not queries:
+        return []
+
+    def produce() -> List[Dict[str, Any]]:
+        raw_articles: List[Dict[str, Any]] = []
+        for query in queries:
+            raw_articles.extend(_fetch_gnews_articles(query, limit=limit_per_query))
+            if not raw_articles:
+                raw_articles.extend(_fetch_newsapi_articles(query))
+        return deduplicate_articles(raw_articles)[: max(10, len(queries) * limit_per_query)]
+
+    cache_key = "brand-news:" + "|".join(query.casefold() for query in queries)
+    return cached_call("gnews", cache_key, produce, ttl_seconds=settings.news_cache_ttl_seconds)
+
+
 def get_trend_news() -> List[Dict[str, Any]]:
     """Compatibility wrapper used by the opportunity pool builder.
 
@@ -218,15 +242,41 @@ def get_trend_news() -> List[Dict[str, Any]]:
 
 
 def _fetch_articles_for_topic(topic: str) -> List[Dict[str, Any]]:
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         batches = executor.map(
             lambda fetcher: fetcher(topic),
-            (_fetch_serpapi_google_news, _fetch_newsapi_articles),
+            (_fetch_gnews_articles, _fetch_serpapi_google_news, _fetch_newsapi_articles),
         )
         articles = [article for batch in batches for article in batch]
 
     logger.info("Fetched %s raw articles for topic '%s'", len(articles), topic)
     return articles
+
+
+def _fetch_gnews_articles(topic: str, limit: int = 10) -> List[Dict[str, Any]]:
+    api_key = settings.gnews_api_key or GNEWS_API_KEY
+    if not api_key:
+        return []
+
+    try:
+        response = requests.get(
+            "https://gnews.io/api/v4/search",
+            params={
+                "q": topic,
+                "lang": "en",
+                "country": settings.news_country.lower(),
+                "max": min(10, max(1, limit)),
+                "sortby": "publishedAt",
+                "apikey": api_key,
+            },
+            timeout=settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return [_normalize_gnews_article(article) for article in payload.get("articles", [])]
+    except Exception:
+        logger.warning("GNews fetch failed for topic '%s'", topic)
+        return []
 
 
 def _fetch_serpapi_google_news(topic: str) -> List[Dict[str, Any]]:
@@ -332,26 +382,37 @@ def _normalize_newsapi_article(article: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_gnews_article(article: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "title": _first_non_empty(article, ["title"]),
+        "headline": _first_non_empty(article, ["title"]),
+        "source": _extract_source_name(article),
+        "published_date": _first_non_empty(article, ["publishedAt"]),
+        "description": _first_non_empty(article, ["description", "content"]),
+        "content": _first_non_empty(article, ["content"]),
+        "url": _first_non_empty(article, ["url"]),
+        "image": _first_non_empty(article, ["image"]),
+        "source_type": "gnews",
+    }
+
+
 def _clean_and_score_articles(topic: str, raw_articles: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=MAX_ARTICLE_AGE_DAYS)
 
-    seen_urls: Set[str] = set()
-    seen_titles: Set[str] = set()
     scored_articles: List[Dict[str, Any]] = []
 
-    for raw_article in raw_articles:
+    for raw_article in deduplicate_articles(list(raw_articles)):
         title = _normalize_text(raw_article.get("title", ""))
         if not title or len(title) < MIN_TITLE_LENGTH:
             continue
 
         url = _normalize_url(raw_article.get("url", ""))
-        url_key = url.casefold()
-        if not url or url_key in seen_urls:
+        if not url:
             continue
 
         title_key = _normalize_title_key(title)
-        if title_key in seen_titles:
+        if not title_key:
             continue
 
         published_date = _parse_datetime(raw_article.get("published_date"))
@@ -367,15 +428,15 @@ def _clean_and_score_articles(topic: str, raw_articles: Sequence[Dict[str, Any]]
 
         importance_score = calculate_importance_score(topic, raw_article, relevance_score)
 
-        seen_urls.add(url_key)
-        seen_titles.add(title_key)
-
         scored_articles.append(
             {
                 "title": title,
+                "headline": title,
                 "source": _normalize_text(raw_article.get("source", "Unknown")) or "Unknown",
                 "published_date": published_date.isoformat() if published_date else raw_article.get("published_date"),
                 "description": _truncate_text(_normalize_text(raw_article.get("description", "")), 400),
+                "content": _truncate_text(_normalize_text(raw_article.get("content", "")), 700),
+                "image": _normalize_text(raw_article.get("image", "")),
                 "url": url,
                 "relevance_score": relevance_score,
                 "importance_score": importance_score,
@@ -383,6 +444,29 @@ def _clean_and_score_articles(topic: str, raw_articles: Sequence[Dict[str, Any]]
         )
 
     return scored_articles[:MAX_ARTICLES_PER_TOPIC]
+
+
+def deduplicate_articles(raw_articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicate with URL normalization plus fuzzy headline similarity."""
+
+    unique: List[Dict[str, Any]] = []
+    seen_urls: Set[str] = set()
+    for article in raw_articles:
+        title = _normalize_text(article.get("title") or article.get("headline"))
+        url = _normalize_url(article.get("url", ""))
+        url_key = url.casefold()
+        if url_key and url_key in seen_urls:
+            continue
+        if any(_similarity(title, _normalize_text(existing.get("title") or existing.get("headline"))) >= 0.88 for existing in unique):
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        normalized = dict(article)
+        normalized["title"] = title
+        normalized["headline"] = title
+        normalized["url"] = url
+        unique.append(normalized)
+    return unique
 
 
 def calculate_relevance_score(topic: str, article: Dict[str, Any]) -> int:

@@ -64,7 +64,7 @@ def headline(title: str, subtitle: str) -> None:
 def run_discovery(generate_assets: bool = False) -> None:
     with st.spinner("Scanning live signals and ranking brand opportunities…"):
         st.session_state.opportunities = discover_and_rank(
-            st.session_state.brand, limit=6, generate_assets=generate_assets
+            st.session_state.brand, limit=10, generate_assets=generate_assets
         )
     if st.session_state.opportunities:
         st.session_state.selected_topic = st.session_state.opportunities[0]["topic"]
@@ -114,28 +114,87 @@ if page == "Overview":
         cols[2].metric("High priority", sum(item["final_score"] >= 75 for item in items))
         cols[3].metric("News sources", sum(item["source_diversity"] for item in items))
 
-        left, right = st.columns([1.7, 1])
-        with left:
-            st.subheader("Top opportunities")
-            for item in items[:5]:
+        st.subheader("Top opportunities")
+        for item in items[:10]:
+            safe_category = escape(str(item["category"]))
+            safe_source = escape(str(item["source"]))
+            safe_topic = escape(str(item["topic"]))
+            safe_summary = escape(str(item["summary"] or item["reason"]))
+            st.markdown(
+                f"""<div class="nj-card"><div class="nj-kicker">{safe_category} · {safe_source}</div>
+                <h3>{score_color(item['final_score'])} {safe_topic}</h3>
+                <p>{safe_summary}</p>
+                <span class="nj-score">{item['final_score']}</span> / 100
+                &nbsp; · Relevance {item.get('relevance_score', item.get('brand_relevance', 0))}
+                &nbsp; · Trend {item.get('trend_score', item.get('trend_strength', 0))}</div>""",
+                unsafe_allow_html=True,
+            )
+
+        tab_news, tab_trends, tab_competitors, tab_ai = st.tabs(
+            ["Latest relevant news", "Trending topics", "Competitor activity", "AI recommendations"]
+        )
+        with tab_news:
+            shown = 0
+            for item in items:
+                for article in item.get("articles", []):
+                    if article.get("relevance_score", 0) < 60:
+                        continue
+                    title = article.get("headline") or article.get("title")
+                    st.markdown(f"**{title}**")
+                    st.caption(f"{article.get('source', 'Unknown')} · relevance {article.get('relevance_score', 0)}/100")
+                    if article.get("description"):
+                        st.write(article["description"])
+                    if article.get("url"):
+                        st.link_button("Read source", article["url"])
+                    shown += 1
+                    if shown >= 8:
+                        break
+                if shown >= 8:
+                    break
+            if not shown:
+                st.info("No article crossed the 60 relevance threshold yet. Try refining the brand profile or adding provider keys.")
+        with tab_trends:
+            left, right = st.columns([1.4, 1])
+            with left:
+                for item in items:
+                    st.markdown(
+                        f"- **{item['topic']}** — trend {item.get('trend_score', item.get('trend_strength', 0))}/100, "
+                        f"brand relevance {item.get('brand_relevance', 0)}/100"
+                    )
+            with right:
+                frame = pd.DataFrame(analytics["top_categories"])
+                if not frame.empty:
+                    st.plotly_chart(
+                        px.pie(frame, names="category", values="count", hole=.58, title="Relevant topic mix"),
+                        use_container_width=True,
+                    )
+        with tab_competitors:
+            competitor_rows = []
+            for item in items:
+                competitor_rows.extend(item.get("competitor_signals", []))
+            if competitor_rows:
+                for mention in competitor_rows[:8]:
+                    st.markdown(f"**{mention.get('competitor', 'Competitor')}** — {mention.get('headline', '')}")
+                    st.caption(
+                        f"{mention.get('announcement_type', 'Signal')} · impact {mention.get('impact_score', 0)}/100 · "
+                        f"{mention.get('date', '')}"
+                    )
+                    if mention.get("url"):
+                        st.link_button("Open mention", mention["url"])
+            else:
+                st.info("No competitor activity loaded yet. Add competitors and GNews/NewsAPI keys for live monitoring.")
+        with tab_ai:
+            for item in items[:3]:
+                campaign = item.get("campaign") or {}
                 safe_category = escape(str(item["category"]))
-                safe_source = escape(str(item["source"]))
                 safe_topic = escape(str(item["topic"]))
-                safe_summary = escape(str(item["summary"] or item["reason"]))
-                st.markdown(
-                    f"""<div class="nj-card"><div class="nj-kicker">{safe_category} · {safe_source}</div>
-                    <h3>{score_color(item['final_score'])} {safe_topic}</h3>
-                    <p>{safe_summary}</p>
-                    <span class="nj-score">{item['final_score']}</span> / 100</div>""",
-                    unsafe_allow_html=True,
-                )
-        with right:
-            frame = pd.DataFrame(analytics["top_categories"])
-            if not frame.empty:
-                st.plotly_chart(
-                    px.pie(frame, names="category", values="count", hole=.58, title="Trending categories"),
-                    use_container_width=True,
-                )
+                st.markdown(f"#### {safe_topic}")
+                st.caption(safe_category)
+                st.write(f"**Recommended Campaign:** {campaign.get('campaign_angle', item.get('recommended_angle', 'Timely point of view'))}")
+                st.write(f"**Recommended Content Piece:** {', '.join(campaign.get('suggested_content', ['Rapid-response LinkedIn post'])[:2])}")
+                content = item.get("content") or {}
+                st.write(f"**Recommended Social Post:** {content.get('twitter_post') or content.get('linkedin_post', '')[:220]}")
+                st.write(f"**Why Now:** {campaign.get('why_it_matters', item.get('reason', 'The signal is timely and brand-relevant.'))}")
 
 elif page == "Opportunity Explorer":
     headline("Opportunity Explorer", "Search, filter, and inspect the evidence behind every score.")
@@ -206,11 +265,16 @@ elif page == "Campaign Studio":
                 c2.write("**Recommended channels**")
                 c2.write(" · ".join(campaign["recommended_channels"]))
                 content = item.get("content", {})
-                tabs = st.tabs(["LinkedIn", "X / Twitter", "Instagram", "Hook & CTA"])
+                tabs = st.tabs(["LinkedIn", "X / Twitter", "Instagram", "Blog", "Ads & Email", "Hook & CTA"])
                 tabs[0].text_area("LinkedIn post", content.get("linkedin_post", ""), height=240)
                 tabs[1].text_area("X post", content.get("twitter_post", ""), height=180)
                 tabs[2].text_area("Instagram caption", content.get("instagram_caption", ""), height=240)
-                with tabs[3]:
+                tabs[3].text_area("Blog outline", content.get("blog_outline", ""), height=260)
+                with tabs[4]:
+                    st.text_area("Ad copy", content.get("ad_copy", ""), height=140)
+                    st.text_area("Email campaign", content.get("email_campaign", ""), height=220)
+                    st.text_area("Landing page headline", content.get("landing_page_headline", ""), height=100)
+                with tabs[5]:
                     st.text_area("Marketing hook", content.get("marketing_hook", ""))
                     st.text_area("CTA", content.get("cta", ""))
                     st.write(" ".join(content.get("hashtags", [])))
@@ -265,7 +329,10 @@ elif page == "Competitor Monitor":
     for mention in mentions:
         with st.expander(f"{mention['competitor']} · {mention['headline']}"):
             st.write(mention.get("description", ""))
-            st.caption(f"{mention.get('source', 'Unknown')} · {mention.get('date', '')}")
+            st.caption(
+                f"{mention.get('source', 'Unknown')} · {mention.get('announcement_type', 'Signal')} · "
+                f"impact {mention.get('impact_score', 0)}/100 · {mention.get('date', '')}"
+            )
             if mention.get("url"):
                 st.link_button("Read source", mention["url"])
 

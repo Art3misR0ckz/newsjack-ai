@@ -4,15 +4,19 @@
 
 NEWSJACK AI is an AI-powered marketing intelligence platform that discovers live trends, enriches them with news evidence, measures brand relevance, ranks newsjacking opportunities, and generates campaign strategy plus channel-ready content.
 
-The application is designed to remain demonstrable without provider credentials: curated trends and deterministic generation fallbacks preserve the complete user journey, while SerpAPI, NewsAPI, and OpenRouter unlock live intelligence.
+The application is designed to remain demonstrable without provider credentials: curated trends and deterministic generation fallbacks preserve the complete user journey, while SerpAPI, GNews, YouTube, NewsAPI, web scraping, and OpenRouter unlock live intelligence.
 
 ## Capabilities
 
 - Persistent brand profiles with create, update, list, load, and delete operations
 - Google Trends discovery through SerpAPI with a curated offline fallback
-- Google News, Google Trends News, and NewsAPI enrichment
+- Brand-driven query expansion from profile, products, keywords, audience, and competitors
+- GNews-first article collection with Google News and NewsAPI fallback
+- YouTube search/buzz signal collection
+- Web scraping for OpenAI, Google, NVIDIA, HubSpot, Marketing Brew, TechCrunch, and Product Hunt
 - Duplicate, spam, relevance, recency, importance, and credibility filtering
-- Brand relevance, audience overlap, newsjack potential, and final opportunity scoring
+- Component-level brand relevance across keywords, products, industry, audience, goals, and competitors
+- v2.0 opportunity scoring across relevance, trend momentum, freshness, competitor activity, YouTube buzz, and volume
 - AI campaign angles, insights, recommended channels, and suggested content
 - LinkedIn, X, and Instagram content with hooks, CTAs, and hashtags
 - Competitor mention monitoring
@@ -29,6 +33,9 @@ flowchart LR
     API["FastAPI API"] --> PIPE
     PIPE --> TD["Trend discovery"]
     PIPE --> NEWS["News enrichment"]
+    PIPE --> SCRAPE["Source scrapers"]
+    PIPE --> YT["YouTube signals"]
+    PIPE --> COMP["Competitor monitor"]
     PIPE --> INTEL["Opportunity intelligence"]
     INTEL --> REL["Brand relevance AI"]
     PIPE --> CAM["Campaign generator"]
@@ -42,6 +49,8 @@ flowchart LR
     SERP["SerpAPI"] --> TD
     SERP --> NEWS
     NAPI["NewsAPI"] --> NEWS
+    GNEWS["GNews"] --> NEWS
+    YAPI["YouTube Data API"] --> YT
     OR["OpenRouter"] --> REL
     OR --> CAM
     OR --> CONTENT
@@ -81,10 +90,19 @@ streamlit run app/streamlit_app.py
 | `OPENROUTER_API_KEY` | AI relevance and generation | Offline fallback |
 | `OPENROUTER_MODEL` | OpenRouter model identifier | `openai/gpt-4.1-mini` |
 | `SERPAPI_KEY` | Live trends and Google News | Curated trends |
-| `NEWS_API_KEY` | News enrichment and competitor monitoring | No NewsAPI results |
+| `GNEWS_API_KEY` | Primary brand-news and competitor source | Fallback providers |
+| `NEWS_API_KEY` | Fallback news enrichment and competitor monitoring | No NewsAPI results |
+| `YOUTUBE_API_KEY` | YouTube search and buzz signals | Empty YouTube signals |
 | `SERPAPI_GEO` | Trend geography | `IN` |
 | `CACHE_TTL_SECONDS` | Provider response cache | `1800` |
+| `TRENDS_CACHE_TTL_SECONDS` | Google Trends cache | `3600` |
+| `NEWS_CACHE_TTL_SECONDS` | GNews/news cache | `1800` |
+| `YOUTUBE_CACHE_TTL_SECONDS` | YouTube cache | `3600` |
+| `SCRAPER_CACHE_TTL_SECONDS` | Scraper cache | `1800` |
+| `COMPETITOR_CACHE_TTL_SECONDS` | Competitor monitoring cache | `1800` |
+| `AI_CACHE_TTL_SECONDS` | AI output cache | `86400` |
 | `MAX_TRENDS` | Trends per scan | `12` |
+| `MAX_BRAND_QUERIES` | Brand-expanded queries per scan | `12` |
 | `ENABLE_LLM_RELEVANCE` | Use an LLM during bulk ranking; disabled for fast scans | `false` |
 
 Never commit `.env`; it is intentionally ignored.
@@ -102,14 +120,14 @@ Never commit `.env`; it is intentionally ignored.
 
 ## Scoring
 
-The final opportunity score is an explainable weighted blend:
+The v2.0 final opportunity score is an explainable weighted blend:
 
-- Trend strength: 20%
-- News volume: 10%
-- Source diversity: 10%
-- Brand relevance: 25%
-- Audience overlap: 15%
-- Newsjack potential: 20%
+- Brand relevance: 40%
+- Google Trends momentum: 20%
+- News freshness: 15%
+- Competitor activity: 10%
+- YouTube buzz: 10%
+- Content volume: 5%
 
 All component and final scores are clamped to 0–100.
 

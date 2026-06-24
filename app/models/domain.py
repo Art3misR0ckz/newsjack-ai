@@ -39,19 +39,24 @@ class BrandProfile(DomainModel):
 
 class Trend(DomainModel):
     topic: str
+    title: str | None = None
     category: str = "general"
     source: str = "fallback"
     search_volume: int = 0
+    growth_rate: int = 0
     increase_percentage: int = 0
     trend_strength: int = Field(default=50, ge=0, le=100)
+    trend_score: int = Field(default=50, ge=0, le=100)
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Article(DomainModel):
     headline: str
     description: str = ""
+    content: str = ""
     source: str = "Unknown"
     published_date: str | None = None
+    image: str = ""
     url: str = ""
     relevance_score: int = Field(default=0, ge=0, le=100)
     importance_score: int = Field(default=0, ge=0, le=100)
@@ -72,6 +77,10 @@ class ContentPack(DomainModel):
     linkedin_post: str
     twitter_post: str
     instagram_caption: str
+    blog_outline: str = ""
+    ad_copy: str = ""
+    email_campaign: str = ""
+    landing_page_headline: str = ""
     marketing_hook: str
     cta: str
     hashtags: list[str] = Field(default_factory=list)
@@ -90,6 +99,15 @@ class Opportunity(DomainModel):
     audience_overlap: int = Field(default=0, ge=0, le=100)
     newsjack_potential: int = Field(default=0, ge=0, le=100)
     final_score: int = Field(default=0, ge=0, le=100)
+    opportunity_score: int = Field(default=0, ge=0, le=100)
+    trend_score: int = Field(default=0, ge=0, le=100)
+    freshness_score: int = Field(default=0, ge=0, le=100)
+    competitor_activity_score: int = Field(default=0, ge=0, le=100)
+    youtube_buzz_score: int = Field(default=0, ge=0, le=100)
+    content_volume_score: int = Field(default=0, ge=0, le=100)
+    latest_news: list[Article] = Field(default_factory=list)
+    youtube_signals: list[dict[str, Any]] = Field(default_factory=list)
+    competitor_signals: list[dict[str, Any]] = Field(default_factory=list)
     reason: str = ""
     recommended_angle: str = "informative"
     campaign: Campaign | None = None

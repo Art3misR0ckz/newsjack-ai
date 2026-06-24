@@ -169,68 +169,163 @@ def _normalize_response(payload: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _heuristic_scores(brand_profile: Mapping[str, Any], opportunity: Mapping[str, Any]) -> Dict[str, Any]:
-    brand_name = _normalize_text(brand_profile.get("brand_name", ""))
-    industry = _normalize_text(brand_profile.get("industry", ""))
-    audience = _normalize_text(brand_profile.get("target_audience", ""))
-    goals = _normalize_text(brand_profile.get("goals", ""))
-
-    topic = _extract_topic(opportunity)
-    summary = _normalize_text(opportunity.get("summary", ""))
-    combined_text = f"{brand_name} {industry} {audience} {goals} {topic} {summary}".lower()
-
-    relevance = 20
-    audience_overlap = 20
-    newsjack_potential = 20
-    angle = "informative"
-
-    if any(keyword in combined_text for keyword in ["fitness", "gym", "workout", "training", "protein", "muscle", "nutrition"]):
-        relevance += 30
-        audience_overlap += 35
-        newsjack_potential += 15
-
-    if any(keyword in combined_text for keyword in ["athlete", "sports", "cricket", "football", "soccer", "world cup", "ipl"]):
-        relevance += 25
-        audience_overlap += 20
-        newsjack_potential += 20
-        angle = "inspirational"
-
-    if any(keyword in combined_text for keyword in ["launch", "product", "release", "announcement", "shoe", "shoes", "footwear"]):
-        relevance += 20
-        newsjack_potential += 20
-
-    if any(keyword in combined_text for keyword in ["ai", "openai", "iphone", "apple", "tech"]):
-        relevance += 5
-        audience_overlap += 5
-        newsjack_potential += 10
-        if angle == "informative":
-            angle = "educational"
-
-    if "virat kohli" in combined_text or "one8" in combined_text:
-        relevance += 35
-        audience_overlap += 20
-        newsjack_potential += 20
-        angle = "inspirational"
-
-    if "world cup" in combined_text or "fifa" in combined_text:
-        relevance += 20
-        audience_overlap += 15
-        newsjack_potential += 20
-
-    if "openai" in combined_text or "product launches" in combined_text:
-        newsjack_potential += 10
-        if angle == "informative":
-            angle = "thought_leadership"
+    component = calculate_component_scores(brand_profile, opportunity)
+    brand_fit = _weighted_available_score(
+        brand_profile,
+        component,
+        {
+            "keyword_match": ("keywords", 0.25),
+            "product_match": ("products", 0.20),
+            "industry_match": ("industry", 0.20),
+            "audience_match": ("target_audience", 0.15),
+            "goal_match": ("goals", 0.10),
+            "competitor_match": ("competitors", 0.10),
+        },
+    )
+    eventfulness = _eventfulness_score(opportunity)
+    relevance = round(brand_fit * 0.75 + eventfulness * 0.25)
+    if component["industry_match"] >= 75:
+        relevance = max(relevance, round(component["industry_match"] * 0.50 + eventfulness * 0.20))
+    audience_overlap = round(component["audience_match"] * 0.55 + component["industry_match"] * 0.25 + component["keyword_match"] * 0.20)
+    newsjack_potential = round(
+        relevance * 0.45
+        + eventfulness * 0.35
+        + max(component["competitor_match"], component["goal_match"]) * 0.20
+    )
+    angle = _recommended_angle(component, opportunity)
 
     return {
         "relevance_score": max(0, min(100, relevance)),
         "audience_overlap": max(0, min(100, audience_overlap)),
         "newsjack_potential": max(0, min(100, newsjack_potential)),
         "reason": (
-            "Deterministic fallback based on overlap between the brand, audience, "
-            "industry, goals, and the current trend."
+            "Weighted fit across keywords, products, industry, audience, goals, "
+            "and competitor signals from the active brand profile."
         ),
         "recommended_angle": angle,
+        "component_scores": component,
     }
+
+
+def calculate_component_scores(brand_profile: Mapping[str, Any], opportunity: Mapping[str, Any]) -> Dict[str, int]:
+    """Transparent 0-100 relevance components used by the v2.0 scoring engine."""
+
+    text = _opportunity_text(opportunity)
+    return {
+        "keyword_match": _field_match(_list_field(brand_profile, "keywords"), text),
+        "product_match": _field_match(_list_field(brand_profile, "products"), text),
+        "industry_match": _field_match(_industry_terms(brand_profile.get("industry", "")), text),
+        "audience_match": _field_match(_audience_terms(brand_profile.get("target_audience", "")), text),
+        "goal_match": _field_match(_audience_terms(brand_profile.get("goals", "")), text),
+        "competitor_match": _field_match(_list_field(brand_profile, "competitors"), text),
+    }
+
+
+def _field_match(terms: list[Any], text: str) -> int:
+    tokens = [term.casefold() for term in (_normalize_text(term) for term in terms) if len(term) >= 3]
+    if not tokens or not text:
+        return 0
+    hits = 0
+    for term in tokens:
+        term_tokens = [token for token in re.split(r"[^a-z0-9]+", term) if len(token) > 2]
+        if term in text:
+            hits += 2
+        elif term_tokens and any(token in text for token in term_tokens):
+            hits += 1
+    if not hits:
+        return 0
+    coverage_score = round((hits / max(1, len(tokens) * 2)) * 100)
+    signal_score = 55 + (hits * 12)
+    return max(0, min(100, max(coverage_score, signal_score)))
+
+
+def _weighted_available_score(
+    brand_profile: Mapping[str, Any],
+    component: Mapping[str, int],
+    weights: Mapping[str, tuple[str, float]],
+) -> int:
+    weighted = 0.0
+    total = 0.0
+    for score_key, (profile_key, weight) in weights.items():
+        if _has_profile_value(brand_profile.get(profile_key)):
+            weighted += component.get(score_key, 0) * weight
+            total += weight
+    if not total:
+        return 0
+    return _clamp_score(weighted / total)
+
+
+def _has_profile_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    return True
+
+
+def _industry_terms(value: Any) -> list[str]:
+    industry = _normalize_text(value)
+    lowered = industry.casefold()
+    expansions = [industry] if industry else []
+    if "fitness" in lowered or "nutrition" in lowered:
+        expansions.extend(["fitness", "gym", "workout", "training", "sports", "protein", "recovery"])
+    if "ai" in lowered or "technology" in lowered:
+        expansions.extend(["ai", "artificial intelligence", "software", "product", "launch", "startup"])
+    if "marketing" in lowered:
+        expansions.extend(["marketing", "brand", "campaign", "creator", "social media"])
+    return expansions
+
+
+def _opportunity_text(opportunity: Mapping[str, Any]) -> str:
+    chunks = [
+        opportunity.get("topic"),
+        opportunity.get("title"),
+        opportunity.get("headline"),
+        opportunity.get("summary"),
+        opportunity.get("description"),
+        opportunity.get("content"),
+        opportunity.get("category"),
+    ]
+    for article in opportunity.get("articles", []) or []:
+        if isinstance(article, Mapping):
+            chunks.extend([article.get("title"), article.get("headline"), article.get("description"), article.get("content")])
+    return " ".join(_normalize_text(chunk) for chunk in chunks if _normalize_text(chunk)).casefold()
+
+
+def _list_field(payload: Mapping[str, Any], key: str) -> list[str]:
+    value = payload.get(key)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [_normalize_text(item) for item in value if _normalize_text(item)]
+    return []
+
+
+def _audience_terms(value: Any) -> list[str]:
+    text = _normalize_text(value)
+    stop = {"and", "the", "for", "with", "from", "that", "this", "into", "build", "increase"}
+    return [token for token in re.findall(r"[A-Za-z][A-Za-z0-9+-]{2,}", text) if token.casefold() not in stop][:10]
+
+
+def _eventfulness_score(opportunity: Mapping[str, Any]) -> int:
+    text = _opportunity_text(opportunity)
+    markers = ["launch", "release", "partnership", "funding", "acquisition", "trend", "viral", "breakout", "announcement", "new"]
+    return min(100, 30 + sum(14 for marker in markers if marker in text))
+
+
+def _recommended_angle(component: Mapping[str, int], opportunity: Mapping[str, Any]) -> str:
+    text = _opportunity_text(opportunity)
+    if component.get("competitor_match", 0) >= 50:
+        return "thought_leadership"
+    if any(marker in text for marker in ["how to", "guide", "study", "research", "report"]):
+        return "educational"
+    if any(marker in text for marker in ["launch", "new", "release", "announcement"]):
+        return "actionable"
+    if component.get("audience_match", 0) >= 60:
+        return "empathetic"
+    return "informative"
 
 
 def _blend_scores(llm_score: int, heuristic_score: int, llm_weight: float) -> int:

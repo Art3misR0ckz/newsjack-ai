@@ -62,11 +62,14 @@ def discover_trends(limit: int = 12) -> list[dict[str, Any]]:
                 discovered.append(
                     {
                         "topic": topic,
+                        "title": topic,
                         "category": str(item.get("category") or infer_category(topic)).lower(),
                         "source": "google_trends",
                         "search_volume": volume,
+                        "growth_rate": increase,
                         "increase_percentage": increase,
                         "trend_strength": min(100, 45 + increase // 2 + volume // 5000),
+                        "trend_score": min(100, 45 + increase // 2 + volume // 5000),
                     }
                 )
         except Exception:
@@ -84,7 +87,7 @@ def discover_trends(limit: int = 12) -> list[dict[str, Any]]:
                 unique.append(trend)
         return unique[:limit]
 
-    return cached_call("serpapi", f"trends:{settings.trend_geo}:{limit}", produce)
+    return cached_call("serpapi", f"trends:{settings.trend_geo}:{limit}", produce, ttl_seconds=settings.trends_cache_ttl_seconds)
 
 
 def _fallback_trends() -> list[dict[str, Any]]:
@@ -99,11 +102,14 @@ def _fallback_trends() -> list[dict[str, Any]]:
     return [
         {
             "topic": topic,
+            "title": topic,
             "category": category,
             "source": "curated_fallback",
             "search_volume": 0,
+            "growth_rate": 0,
             "increase_percentage": 0,
             "trend_strength": score,
+            "trend_score": score,
         }
         for topic, category, score in base
     ]

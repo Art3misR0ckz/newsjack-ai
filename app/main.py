@@ -62,7 +62,9 @@ def health() -> dict[str, Any]:
         "providers": {
             "openrouter": bool(settings.openrouter_api_key),
             "serpapi": bool(settings.serpapi_key),
+            "gnews": bool(settings.gnews_api_key),
             "newsapi": bool(settings.newsapi_key),
+            "youtube": bool(settings.youtube_api_key),
         },
     }
 
