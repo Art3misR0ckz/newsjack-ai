@@ -1,8 +1,11 @@
+from types import SimpleNamespace
+
 from app.services import brand_profile_service as service
 
 
 def test_brand_profile_crud(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "PROFILE_DIR", tmp_path)
+    monkeypatch.setattr(service, "settings", SimpleNamespace(mongodb_enabled=False))
     created = service.create_brand_profile(
         {
             "brand_name": "Test Brand",

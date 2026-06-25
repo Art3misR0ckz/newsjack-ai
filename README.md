@@ -9,6 +9,7 @@ The application is designed to remain demonstrable without provider credentials:
 ## Capabilities
 
 - Persistent brand profiles with create, update, list, load, and delete operations
+- MongoDB Atlas-backed brand profiles with local JSON fallback
 - Google Trends discovery through SerpAPI with a curated offline fallback
 - Brand-driven query expansion from profile, products, keywords, audience, and competitors
 - GNews-first article collection with Google News and NewsAPI fallback
@@ -93,6 +94,9 @@ streamlit run app/streamlit_app.py
 | `GNEWS_API_KEY` | Primary brand-news and competitor source | Fallback providers |
 | `NEWS_API_KEY` | Fallback news enrichment and competitor monitoring | No NewsAPI results |
 | `YOUTUBE_API_KEY` | YouTube search and buzz signals | Empty YouTube signals |
+| `MONGODB_ENABLED` | Store brand profiles in MongoDB Atlas | `false` |
+| `MONGODB_URI` | MongoDB Atlas connection string | Local JSON fallback |
+| `MONGODB_DATABASE` | MongoDB database name | `newsjack_ai` |
 | `SERPAPI_GEO` | Trend geography | `IN` |
 | `CACHE_TTL_SECONDS` | Provider response cache | `1800` |
 | `TRENDS_CACHE_TTL_SECONDS` | Google Trends cache | `3600` |
@@ -146,4 +150,7 @@ Runtime data is created under `.newsjack/`:
 - `brands/` contains JSON profile documents.
 - `cache/` contains TTL-bound provider responses.
 
-These files can be removed safely in development; the service recreates the directories.
+When `MONGODB_ENABLED=true`, brand profiles are saved to the `brand_profiles`
+collection in MongoDB Atlas first. Local JSON remains as a development fallback.
+Runtime cache files can be removed safely in development; the service recreates
+the directories.

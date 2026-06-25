@@ -20,6 +20,7 @@ from app.services.brand_profile_service import (
     update_brand_profile,
 )
 from app.services.competitor_monitor_service import monitor_competitors
+from app.services.mongodb_service import ping_mongodb
 from app.services.pipeline_service import add_campaign_assets, discover_and_rank
 from app.services.trend_discovery_service import discover_trends
 
@@ -66,6 +67,7 @@ def health() -> dict[str, Any]:
             "newsapi": bool(settings.newsapi_key),
             "youtube": bool(settings.youtube_api_key),
         },
+        "mongodb": ping_mongodb(),
     }
 
 

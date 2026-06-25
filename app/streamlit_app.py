@@ -10,8 +10,9 @@ import streamlit as st
 
 from app.logging_config import configure_logging
 from app.services.analytics_service import build_analytics
-from app.services.brand_profile_service import list_brand_profiles, save_brand_profile
+from app.services.brand_profile_service import delete_brand_profile, list_brand_profiles, save_brand_profile
 from app.services.competitor_monitor_service import monitor_competitors
+from app.services.mongodb_service import ping_mongodb
 from app.services.pipeline_service import add_campaign_assets, discover_and_rank
 
 configure_logging()
@@ -26,6 +27,9 @@ st.markdown(
         padding: 16px; border-radius: 16px;}
       .nj-card {padding: 18px; border: 1px solid rgba(130,130,130,.22); border-radius: 18px;
         background: linear-gradient(145deg, rgba(110,86,207,.10), rgba(0,180,180,.04)); margin-bottom: 12px;}
+      .brand-card {padding: 16px; border: 1px solid rgba(130,130,130,.22); border-radius: 16px;
+        background: rgba(120,120,120,.07); margin-bottom: 10px;}
+      .active-brand {border-color: #ff4b4b; background: rgba(255,75,75,.08);}
       .nj-kicker {letter-spacing: .12em; text-transform: uppercase; color: #8c83ff; font-size: .78rem; font-weight: 700;}
       .nj-score {font-size: 2rem; font-weight: 800; color: #7f75ff;}
       .stButton > button {border-radius: 12px; font-weight: 650;}
@@ -46,8 +50,10 @@ DEFAULT_BRAND = {
     "brand_summary": "A performance nutrition brand helping active people train and recover better.",
 }
 
+if "profiles" not in st.session_state:
+    st.session_state.profiles = list_brand_profiles()
 if "brand" not in st.session_state:
-    saved = list_brand_profiles()
+    saved = st.session_state.profiles
     st.session_state.brand = saved[0].model_dump(mode="json") if saved else DEFAULT_BRAND.copy()
 if "opportunities" not in st.session_state:
     st.session_state.opportunities = []
@@ -82,6 +88,25 @@ def score_color(score: int) -> str:
     return "🟢" if score >= 75 else "🟡" if score >= 55 else "🔵"
 
 
+def refresh_profiles() -> None:
+    st.session_state.profiles = list_brand_profiles()
+
+
+def activate_profile(profile) -> None:
+    st.session_state.brand = profile.model_dump(mode="json")
+    st.session_state.opportunities = []
+    st.session_state.selected_topic = None
+
+
+def database_badge() -> str:
+    status = ping_mongodb()
+    if status.get("connected"):
+        return "🟢 MongoDB connected"
+    if status.get("enabled"):
+        return "🟡 MongoDB fallback"
+    return "🔵 Local JSON storage"
+
+
 with st.sidebar:
     st.markdown("## ⚡ NEWSJACK AI")
     st.caption("Discover trends. Find opportunities. Generate campaigns.")
@@ -90,6 +115,33 @@ with st.sidebar:
         ["Overview", "Opportunity Explorer", "Campaign Studio", "Brand Profile", "Competitor Monitor", "Analytics"],
         label_visibility="collapsed",
     )
+    st.divider()
+    st.caption("Database")
+    st.write(database_badge())
+    st.divider()
+    st.caption("Brand Library")
+    profiles = st.session_state.get("profiles", [])
+    if profiles:
+        st.caption(f"{len(profiles)} saved profile{'s' if len(profiles) != 1 else ''}")
+        profile_labels = [f"{profile.brand_name} · {profile.industry}" for profile in profiles]
+        current_id = st.session_state.brand.get("id")
+        current_index = next((i for i, profile in enumerate(profiles) if profile.id == current_id), 0)
+        selected_label = st.selectbox("Switch active brand", profile_labels, index=current_index)
+        selected_profile = profiles[profile_labels.index(selected_label)]
+        if selected_profile.id != current_id:
+            activate_profile(selected_profile)
+            st.rerun()
+        for profile in profiles[:5]:
+            is_active = profile.id == st.session_state.brand.get("id")
+            label = f"{'✓ ' if is_active else ''}{profile.brand_name}"
+            if st.button(label, key=f"quick-brand-{profile.id}", use_container_width=True, disabled=is_active):
+                activate_profile(profile)
+                st.rerun()
+    else:
+        st.info("No saved profiles yet. Save one from Brand Profile.")
+    if st.button("Refresh brand library", use_container_width=True):
+        refresh_profiles()
+        st.rerun()
     st.divider()
     st.caption("Active brand")
     st.write(f"**{st.session_state.brand['brand_name']}**")
@@ -283,6 +335,41 @@ elif page == "Campaign Studio":
 
 elif page == "Brand Profile":
     headline("Brand Profile", "Teach the engine what your brand stands for and who it needs to reach.")
+    refresh_profiles()
+    st.subheader("Saved Brand Library")
+    profiles = st.session_state.get("profiles", [])
+    if profiles:
+        search = st.text_input("Find saved brands", placeholder="Search by brand or industry…")
+        visible_profiles = [
+            profile for profile in profiles
+            if search.lower() in f"{profile.brand_name} {profile.industry} {' '.join(profile.keywords)}".lower()
+        ]
+        for profile in visible_profiles:
+            active = profile.id == st.session_state.brand.get("id")
+            card_class = "brand-card active-brand" if active else "brand-card"
+            st.markdown(
+                f"""<div class="{card_class}">
+                <div class="nj-kicker">{escape(profile.industry)}</div>
+                <h4>{'✓ ' if active else ''}{escape(profile.brand_name)}</h4>
+                <p>{escape(profile.brand_summary or profile.target_audience or 'No summary yet.')}</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            c1, c2, c3 = st.columns([1, 1, 4])
+            if c1.button("Use", key=f"use-profile-{profile.id}", disabled=active):
+                activate_profile(profile)
+                st.rerun()
+            if c2.button("Delete", key=f"delete-profile-{profile.id}", disabled=active):
+                delete_brand_profile(profile.id)
+                refresh_profiles()
+                st.success(f"Deleted {profile.brand_name}")
+                st.rerun()
+        if not visible_profiles:
+            st.info("No saved brand matched that search.")
+    else:
+        st.info("No saved brands yet. Fill the form below and save your first profile.")
+    st.divider()
+    st.subheader("Create or edit active brand")
     brand = st.session_state.brand
     with st.form("brand-profile"):
         c1, c2 = st.columns(2)
@@ -295,24 +382,32 @@ elif page == "Brand Profile":
         products = st.text_input("Products (comma separated)", ", ".join(brand.get("products", [])))
         competitors = st.text_input("Competitors (comma separated)", ", ".join(brand.get("competitors", [])))
         summary = st.text_area("Brand summary", brand.get("brand_summary", ""))
+        save_as_new = st.checkbox("Save as a new brand profile", value=not bool(brand.get("id")))
         submitted = st.form_submit_button("Save brand profile", type="primary")
     if submitted:
-        saved = save_brand_profile(
-            {
-                **brand,
-                "brand_name": name,
-                "industry": industry,
-                "target_audience": audience,
-                "tone": tone,
-                "goals": goals,
-                "keywords": keywords,
-                "products": products,
-                "competitors": competitors,
-                "brand_summary": summary,
-            }
-        )
-        st.session_state.brand = saved.model_dump(mode="json")
-        st.success("Brand profile saved.")
+        try:
+            profile_id = None if save_as_new else brand.get("id")
+            saved = save_brand_profile(
+                {
+                    **brand,
+                    "id": profile_id,
+                    "brand_name": name,
+                    "industry": industry,
+                    "target_audience": audience,
+                    "tone": tone,
+                    "goals": goals,
+                    "keywords": keywords,
+                    "products": products,
+                    "competitors": competitors,
+                    "brand_summary": summary,
+                }
+            )
+            st.session_state.brand = saved.model_dump(mode="json")
+            refresh_profiles()
+            st.success(f"Brand profile saved: {saved.brand_name}")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not save brand profile: {exc.__class__.__name__}")
 
 elif page == "Competitor Monitor":
     headline("Competitor Monitor", "Track announcements and earned-media signals around your competitive set.")

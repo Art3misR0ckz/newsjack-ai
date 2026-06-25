@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.config import PROFILE_DIR
+from app.config import PROFILE_DIR, settings
 from app.models import BrandProfile
 from app.services.llm_service import generate_json
+from app.services.mongodb_service import get_collection
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,18 @@ def save_brand_profile(profile: BrandProfile | dict[str, Any]) -> BrandProfile:
     model = profile if isinstance(profile, BrandProfile) else BrandProfile.model_validate(profile)
     model.id = model.id or f"{_slug(model.brand_name)}-{uuid.uuid4().hex[:8]}"
     model.updated_at = datetime.now(timezone.utc)
+    if _mongodb_enabled():
+        try:
+            collection = _profiles_collection()
+            collection.update_one(
+                {"id": model.id},
+                {"$set": _profile_document(model)},
+                upsert=True,
+            )
+            logger.info("Brand profile saved to MongoDB", extra={"event": "brand_saved", "brand": model.brand_name})
+            return model
+        except Exception:
+            logger.warning("MongoDB profile save failed; falling back to local JSON", exc_info=True)
     path = _profile_path(model.id)
     temp = path.with_suffix(".tmp")
     temp.write_text(model.model_dump_json(indent=2), encoding="utf-8")
@@ -53,6 +66,13 @@ def update_brand_profile(profile_id: str, payload: dict[str, Any]) -> BrandProfi
 
 
 def load_brand_profile(profile_id: str) -> BrandProfile:
+    if _mongodb_enabled():
+        try:
+            document = _profiles_collection().find_one({"id": profile_id})
+            if document:
+                return _profile_from_document(document)
+        except Exception:
+            logger.warning("MongoDB profile load failed; falling back to local JSON", exc_info=True)
     path = _profile_path(profile_id)
     if not path.exists():
         raise FileNotFoundError(f"Brand profile '{profile_id}' was not found")
@@ -60,20 +80,42 @@ def load_brand_profile(profile_id: str) -> BrandProfile:
 
 
 def list_brand_profiles() -> list[BrandProfile]:
+    if _mongodb_enabled():
+        try:
+            mongo_profiles = [
+                _profile_from_document(document)
+                for document in _profiles_collection().find({}, sort=[("updated_at", -1)])
+            ]
+            local_profiles = _list_local_profiles()
+            merged = _merge_profiles(mongo_profiles, local_profiles)
+            _sync_local_profiles_to_mongo(local_profiles, {profile.id for profile in mongo_profiles if profile.id})
+            return sorted(merged, key=_profile_sort_key, reverse=True)
+        except Exception:
+            logger.warning("MongoDB profile list failed; falling back to local JSON", exc_info=True)
+    return _list_local_profiles()
+
+
+def _list_local_profiles() -> list[BrandProfile]:
     profiles: list[BrandProfile] = []
     for path in sorted(PROFILE_DIR.glob("*.json")):
         try:
             profiles.append(BrandProfile.model_validate_json(path.read_text(encoding="utf-8")))
         except Exception:
             logger.exception("Skipping invalid profile file: %s", path)
-    return sorted(profiles, key=lambda item: item.updated_at, reverse=True)
+    return sorted(profiles, key=_profile_sort_key, reverse=True)
 
 
 def delete_brand_profile(profile_id: str) -> bool:
+    deleted = False
+    if _mongodb_enabled():
+        try:
+            deleted = _profiles_collection().delete_one({"id": profile_id}).deleted_count > 0
+        except Exception:
+            logger.warning("MongoDB profile delete failed; falling back to local JSON", exc_info=True)
     path = _profile_path(profile_id)
     existed = path.exists()
     path.unlink(missing_ok=True)
-    return existed
+    return deleted or existed
 
 
 def generate_brand_profile(scraped_data: dict[str, Any]) -> dict[str, Any]:
@@ -114,3 +156,57 @@ def _fallback_from_scrape(data: dict[str, Any]) -> dict[str, Any]:
         "website": data.get("url"),
         "brand_summary": description or f"{title} is a consumer-facing brand.",
     }
+
+
+def _profiles_collection():
+    collection = get_collection("brand_profiles")
+    collection.create_index("id", unique=True)
+    collection.create_index("updated_at")
+    return collection
+
+
+def _mongodb_enabled() -> bool:
+    return bool(getattr(settings, "mongodb_enabled", False))
+
+
+def _profile_document(model: BrandProfile) -> dict[str, Any]:
+    document = model.model_dump(mode="python")
+    document["id"] = model.id
+    return document
+
+
+def _profile_from_document(document: dict[str, Any]) -> BrandProfile:
+    clean = dict(document)
+    clean.pop("_id", None)
+    return BrandProfile.model_validate(clean)
+
+
+def _merge_profiles(*groups: list[BrandProfile]) -> list[BrandProfile]:
+    merged: dict[str, BrandProfile] = {}
+    for group in groups:
+        for profile in group:
+            key = profile.id or _slug(profile.brand_name)
+            existing = merged.get(key)
+            if not existing or _profile_sort_key(profile) >= _profile_sort_key(existing):
+                merged[key] = profile
+    return list(merged.values())
+
+
+def _sync_local_profiles_to_mongo(local_profiles: list[BrandProfile], mongo_ids: set[str]) -> None:
+    if not local_profiles:
+        return
+    collection = _profiles_collection()
+    for profile in local_profiles:
+        if not profile.id or profile.id in mongo_ids:
+            continue
+        try:
+            collection.update_one({"id": profile.id}, {"$set": _profile_document(profile)}, upsert=True)
+        except Exception:
+            logger.warning("Could not sync local profile '%s' to MongoDB", profile.id, exc_info=True)
+
+
+def _profile_sort_key(profile: BrandProfile) -> datetime:
+    value = profile.updated_at
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
