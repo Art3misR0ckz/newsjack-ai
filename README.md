@@ -90,6 +90,14 @@ streamlit run app/streamlit_app.py
 |---|---|---|
 | `OPENROUTER_API_KEY` | AI relevance and generation | Offline fallback |
 | `OPENROUTER_MODEL` | OpenRouter model identifier | `openai/gpt-4.1-mini` |
+| `NOTION_API_KEY` | Notion integration secret for the LinkedIn Scheduler | Notion disabled |
+| `NOTION_PARENT_PAGE_ID` | Parent page where the scheduler database is created | Required unless database ID is set |
+| `NOTION_LINKEDIN_DATABASE_ID` | Existing Notion scheduler database ID | Auto-create database |
+| `LINKEDIN_CLIENT_ID` | LinkedIn app client ID for OAuth/token management | Empty |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn app client secret for OAuth/token management | Empty |
+| `LINKEDIN_REDIRECT_URI` | LinkedIn OAuth redirect URI | Empty |
+| `LINKEDIN_ACCESS_TOKEN` | LinkedIn access token with organization posting permissions | LinkedIn posting disabled |
+| `LINKEDIN_ORGANIZATION_URN` | Organization author URN, for example `urn:li:organization:123` | LinkedIn posting disabled |
 | `SERPAPI_KEY` | Live trends and Google News | Curated trends |
 | `GNEWS_API_KEY` | Primary brand-news and competitor source | Fallback providers |
 | `NEWS_API_KEY` | Fallback news enrichment and competitor monitoring | No NewsAPI results |
@@ -143,6 +151,15 @@ pytest -q
 
 The test suite mocks provider boundaries and runs without live API calls.
 
+Live/manual scheduler smoke tests:
+
+```powershell
+python tests/test_notion_scheduler.py
+python tests/test_publish_due_linkedin_posts.py
+```
+
+These tests print whether required environment variables are present, but never print secret values.
+
 ## Data and cache
 
 Runtime data is created under `.newsjack/`:
@@ -154,3 +171,75 @@ When `MONGODB_ENABLED=true`, brand profiles are saved to the `brand_profiles`
 collection in MongoDB Atlas first. Local JSON remains as a development fallback.
 Runtime cache files can be removed safely in development; the service recreates
 the directories.
+
+## Notion LinkedIn Scheduler Setup
+
+The LinkedIn Scheduler creates a Notion database named `GamePulse AI LinkedIn Calendar`, generates 30 days of GamePulse AI LinkedIn drafts, pushes them to Notion, and lets you manage approval and scheduling status from Streamlit. Approved due posts can be published through LinkedIn's official Posts API. Selenium and browser automation are not used.
+
+1. Create a Notion integration at `https://www.notion.so/my-integrations`.
+2. Copy the integration secret and add it to `.env`:
+
+```powershell
+NOTION_API_KEY=secret_xxx
+```
+
+3. Create or choose a parent Notion page where the scheduler database should live.
+4. Open that page in Notion, choose Share, and invite/share the page with your integration.
+5. Copy the parent page ID from the Notion URL. It is the long UUID-like value near the end of the URL.
+6. Add the parent page ID to `.env`:
+
+```powershell
+NOTION_PARENT_PAGE_ID=your_parent_page_id
+```
+
+7. If you already created the database and want NEWSJACK AI to reuse it, add:
+
+```powershell
+NOTION_LINKEDIN_DATABASE_ID=your_database_id
+```
+
+8. To enable official LinkedIn publishing, create/configure a LinkedIn app with organization posting access, then add:
+
+```powershell
+LINKEDIN_CLIENT_ID=your_client_id
+LINKEDIN_CLIENT_SECRET=your_client_secret
+LINKEDIN_REDIRECT_URI=your_redirect_uri
+LINKEDIN_ACCESS_TOKEN=your_access_token
+LINKEDIN_ORGANIZATION_URN=urn:li:organization:your_organization_id
+```
+
+Only Notion posts with `Approval = true`, `Status = Scheduled`, and a due date/time are published. Draft and unapproved posts are always refused by the service.
+
+9. Install dependencies and run Streamlit:
+
+```powershell
+pip install -r requirements.txt
+python -m streamlit run app/streamlit_app.py
+```
+
+10. Open the `LinkedIn Scheduler` page, then use `Connect Notion`, `Generate 30-Day Calendar`, `Push to Notion`, `Load from Notion`, and `Publish Due Posts`.
+
+To test the Notion connection and push three sample posts:
+
+```powershell
+python tests/test_notion_scheduler.py
+```
+
+To publish due approved posts from Notion through the official LinkedIn API:
+
+```powershell
+python scripts/publish_due_linkedin_posts.py
+python -m scripts.publish_due_linkedin_posts
+```
+
+Render Cron command:
+
+```powershell
+python scripts/publish_due_linkedin_posts.py
+```
+
+Render Cron schedule for 10 AM IST:
+
+```text
+30 4 * * *
+```

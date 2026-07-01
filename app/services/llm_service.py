@@ -11,6 +11,7 @@ import requests
 
 from app.config import settings
 from app.services.cache_service import cached_call
+from app.services.env_service import env_value
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +24,24 @@ def generate_json(
     cache_key: str,
     temperature: float = 0.2,
 ) -> dict[str, Any]:
-    if not settings.openrouter_api_key:
+    openrouter_api_key = env_value("OPENROUTER_API_KEY")
+    if not openrouter_api_key:
         return fallback
+    openrouter_base_url = env_value("OPENROUTER_BASE_URL", settings.openrouter_base_url)
+    openrouter_model = env_value("OPENROUTER_MODEL", settings.openrouter_model)
 
     def produce() -> dict[str, Any]:
         try:
             response = requests.post(
-                f"{settings.openrouter_base_url.rstrip('/')}/chat/completions",
+                f"{openrouter_base_url.rstrip('/')}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "Authorization": f"Bearer {openrouter_api_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": "https://newsjack.ai",
                     "X-Title": settings.app_name,
                 },
                 json={
-                    "model": settings.openrouter_model,
+                    "model": openrouter_model,
                     "temperature": temperature,
                     "response_format": {"type": "json_object"},
                     "messages": [
@@ -50,8 +54,12 @@ def generate_json(
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
             return _parse_json(content)
-        except Exception:
-            logger.exception("OpenRouter generation failed", extra={"event": "llm_error"})
+        except Exception as exc:
+            logger.warning(
+                "OpenRouter generation failed; using deterministic fallback: %s",
+                exc.__class__.__name__,
+                extra={"event": "llm_error"},
+            )
             return fallback
 
     result = cached_call("openrouter", cache_key, produce)

@@ -8,9 +8,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-
 ROOT_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT_DIR / ".env", override=False)
 DATA_DIR = ROOT_DIR / "app" / "data"
 RUNTIME_DIR = ROOT_DIR / ".newsjack"
 CACHE_DIR = RUNTIME_DIR / "cache"

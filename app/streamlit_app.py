@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 from html import escape
 from pathlib import Path
 
@@ -18,8 +19,22 @@ from app.logging_config import configure_logging
 from app.services.analytics_service import build_analytics
 from app.services.brand_profile_service import delete_brand_profile, list_brand_profiles, save_brand_profile
 from app.services.competitor_monitor_service import monitor_competitors
+from app.services.linkedin_scheduler_service import (
+    GAMEPULSE_PROFILE,
+    approve_post,
+    export_calendar_to_csv,
+    generate_linkedin_calendar,
+    load_calendar_from_notion,
+    mark_post_as_failed,
+    mark_post_as_posted,
+    mark_post_as_scheduled,
+    push_calendar_to_notion,
+)
+from app.services.linkedin_post_service import publish_due_posts
 from app.services.mongodb_service import ping_mongodb
+from app.services.notion_service import get_or_create_linkedin_calendar_database
 from app.services.pipeline_service import add_campaign_assets, discover_and_rank
+from app.services.env_service import env_presence_report
 
 configure_logging()
 
@@ -65,6 +80,10 @@ if "opportunities" not in st.session_state:
     st.session_state.opportunities = []
 if "selected_topic" not in st.session_state:
     st.session_state.selected_topic = None
+if "linkedin_generated_calendar" not in st.session_state:
+    st.session_state.linkedin_generated_calendar = []
+if "linkedin_notion_posts" not in st.session_state:
+    st.session_state.linkedin_notion_posts = []
 
 
 def headline(title: str, subtitle: str) -> None:
@@ -118,7 +137,15 @@ with st.sidebar:
     st.caption("Discover trends. Find opportunities. Generate campaigns.")
     page = st.radio(
         "Workspace",
-        ["Overview", "Opportunity Explorer", "Campaign Studio", "Brand Profile", "Competitor Monitor", "Analytics"],
+        [
+            "Overview",
+            "Opportunity Explorer",
+            "Campaign Studio",
+            "LinkedIn Scheduler",
+            "Brand Profile",
+            "Competitor Monitor",
+            "Analytics",
+        ],
         label_visibility="collapsed",
     )
     st.divider()
@@ -338,6 +365,160 @@ elif page == "Campaign Studio":
                     st.write(" ".join(content.get("hashtags", [])))
             else:
                 st.info("Generate the campaign to create angles, channel recommendations, and social copy.")
+
+elif page == "LinkedIn Scheduler":
+    headline("GamePulse AI LinkedIn Scheduler", "Generate, approve, and manage 30 days of LinkedIn content in Notion.")
+
+    def load_notion_posts_into_state(success_message: str | None = None) -> bool:
+        result = load_calendar_from_notion()
+        if result.get("ok"):
+            st.session_state.linkedin_notion_posts = result.get("posts", [])
+            if success_message:
+                st.success(success_message.format(count=len(st.session_state.linkedin_notion_posts)))
+            return True
+        st.error(result.get("message", "Could not load posts from Notion."))
+        return False
+
+    def apply_notion_action(page_id: str, action) -> None:
+        result = action(page_id)
+        if result.get("ok"):
+            st.toast(result.get("message", "Notion updated."), icon="✅")
+            load_notion_posts_into_state()
+            st.rerun()
+        else:
+            st.error(result.get("message", "Could not update Notion."))
+
+    notion_env = env_presence_report(["NOTION_API_KEY", "NOTION_PARENT_PAGE_ID", "NOTION_LINKEDIN_DATABASE_ID"])
+    notion_ready = bool(notion_env["NOTION_API_KEY"] and (notion_env["NOTION_PARENT_PAGE_ID"] or notion_env["NOTION_LINKEDIN_DATABASE_ID"]))
+    linkedin_env = env_presence_report(["LINKEDIN_ACCESS_TOKEN", "LINKEDIN_ORGANIZATION_URN"])
+    if not notion_ready:
+        st.warning("Notion is not configured yet.")
+        st.markdown(
+            """
+            **Setup instructions**
+
+            1. Create a Notion integration at https://www.notion.so/my-integrations.
+            2. Copy the integration secret into `.env` as `NOTION_API_KEY`.
+            3. Create or choose a parent Notion page for the scheduler database.
+            4. Share that parent page with your Notion integration.
+            5. Copy the parent page ID into `.env` as `NOTION_PARENT_PAGE_ID`.
+            6. Optionally add `NOTION_LINKEDIN_DATABASE_ID` if you already have a database.
+            7. Restart Streamlit after changing `.env`.
+            """
+        )
+    if not all(linkedin_env.values()):
+        st.info("LinkedIn publishing not configured yet. Notion generation, approval, scheduling, and CSV export are still available.")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    if c1.button("Connect Notion", use_container_width=True):
+        with st.spinner("Connecting to Notion..."):
+            result = get_or_create_linkedin_calendar_database()
+        if result.get("ok"):
+            st.success(f"{result['message']} Database ID: {result.get('database_id', '')}")
+            load_notion_posts_into_state()
+        else:
+            st.error(result.get("message", "Could not connect to Notion."))
+
+    if c2.button("Generate 30-Day Calendar", type="primary", use_container_width=True):
+        with st.spinner("Generating GamePulse AI LinkedIn calendar..."):
+            st.session_state.linkedin_generated_calendar = generate_linkedin_calendar(GAMEPULSE_PROFILE, days=30)
+        st.success("Generated 30 draft posts. Use Push to Notion to save them.")
+
+    if c3.button("Push to Notion", use_container_width=True):
+        if not st.session_state.linkedin_generated_calendar:
+            st.error("Generate a calendar before pushing to Notion.")
+        else:
+            with st.spinner("Pushing posts to Notion..."):
+                result = push_calendar_to_notion(st.session_state.linkedin_generated_calendar)
+            if result.get("ok"):
+                st.success(result["message"])
+                st.session_state.linkedin_generated_calendar = []
+                load_notion_posts_into_state()
+            else:
+                st.error(result.get("message", "Could not push calendar to Notion."))
+
+    if c4.button("Load from Notion", use_container_width=True):
+        with st.spinner("Loading calendar from Notion..."):
+            load_notion_posts_into_state("Loaded {count} posts from Notion.")
+
+    if c5.button("Publish Due Posts", use_container_width=True):
+        with st.spinner("Publishing due approved posts through LinkedIn API..."):
+            result = publish_due_posts()
+        if result.get("ok"):
+            st.success(result.get("message", "Publish complete."))
+        else:
+            st.warning(
+                f"Published {result.get('published', 0)} post(s); "
+                f"{result.get('failed', 0)} failed."
+            )
+        load_notion_posts_into_state()
+
+    pending_count = len(st.session_state.linkedin_generated_calendar)
+    if pending_count:
+        st.info(f"{pending_count} generated drafts are waiting to be pushed to Notion. The list below only shows Notion posts.")
+
+    notion_posts = st.session_state.linkedin_notion_posts
+    csv_data = export_calendar_to_csv(notion_posts) if notion_posts else ""
+    st.download_button(
+        "Export Notion Posts CSV",
+        data=csv_data,
+        file_name="gamepulse_ai_linkedin_calendar.csv",
+        mime="text/csv",
+        disabled=not bool(csv_data),
+    )
+
+    if notion_posts:
+        table = pd.DataFrame(
+            [
+                {
+                    "Date": post.get("date", ""),
+                    "Time": post.get("time", ""),
+                    "Title": post.get("post_title", ""),
+                    "Status": post.get("status", ""),
+                    "Approval": "Approved" if post.get("approval") else "Pending",
+                    "LinkedIn URL": post.get("linkedin_url", ""),
+                    "LinkedIn Post": post.get("linkedin_post", ""),
+                }
+                for post in notion_posts
+            ]
+        )
+        st.dataframe(table, use_container_width=True, hide_index=True)
+        for index, post in enumerate(notion_posts):
+            title = post.get("post_title") or f"LinkedIn post {index + 1}"
+            with st.expander(f"{post.get('date', '')} · {title}"):
+                meta = st.columns(5)
+                meta[0].write(f"**Date:** {post.get('date', '')}")
+                meta[1].write(f"**Time:** {post.get('time', '')}")
+                meta[2].write(f"**Title:** {title}")
+                meta[3].write(f"**Status:** {post.get('status', '')}")
+                meta[4].write(f"**Approval:** {'Approved' if post.get('approval') else 'Pending'}")
+                st.text_area(
+                    "Full LinkedIn post",
+                    post.get("linkedin_post", ""),
+                    height=220,
+                    key=f"linkedin-post-{post.get('page_id', index)}",
+                    disabled=True,
+                )
+                if post.get("campaign_angle"):
+                    st.write(f"**Campaign angle:** {post.get('campaign_angle', '')}")
+                if post.get("hashtags"):
+                    st.write(f"**Hashtags:** {' '.join('#' + tag.lstrip('#') for tag in post.get('hashtags', []))}")
+                if post.get("linkedin_url"):
+                    st.link_button("Open LinkedIn post", post["linkedin_url"])
+                actions = st.columns(4)
+                page_id = post.get("page_id", "")
+                if actions[0].button("Approve", key=f"approve-{index}", disabled=not bool(page_id)):
+                    apply_notion_action(page_id, approve_post)
+                if actions[1].button("Mark Scheduled", key=f"scheduled-{index}", disabled=not bool(page_id)):
+                    apply_notion_action(page_id, mark_post_as_scheduled)
+                if actions[2].button("Mark Posted", key=f"posted-{index}", disabled=not bool(page_id)):
+                    apply_notion_action(page_id, mark_post_as_posted)
+                if actions[3].button("Mark Failed", key=f"failed-{index}", disabled=not bool(page_id)):
+                    apply_notion_action(page_id, mark_post_as_failed)
+                if not page_id:
+                    st.caption("Load this post from Notion to enable approval and status updates.")
+    else:
+        st.info("Load posts from Notion, or generate a 30-day calendar and push it to Notion.")
 
 elif page == "Brand Profile":
     headline("Brand Profile", "Teach the engine what your brand stands for and who it needs to reach.")
